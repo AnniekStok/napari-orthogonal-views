@@ -1,57 +1,16 @@
 name: napari-orthogonal-views
 display_name: Orthogonal Views
-# use 'hidden' to remove plugin from napari hub search results
 visibility: public
-# see https://napari.org/stable/plugins/technical_references/manifest.html#fields for valid categories
-# categories: []
 contributions:
   commands:
-    - id: napari-orthogonal-views.get_reader
-      python_name: napari_orthogonal_views._reader:napari_get_reader
-      title: Open data with Orthogonal Views
-    - id: napari-orthogonal-views.write_multiple
-      python_name: napari_orthogonal_views._writer:write_multiple
-      title: Save multi-layer data with Orthogonal Views
-    - id: napari-orthogonal-views.write_single_image
-      python_name: napari_orthogonal_views._writer:write_single_image
-      title: Save image data with Orthogonal Views
-    - id: napari-orthogonal-views.make_sample_data
-      python_name: napari_orthogonal_views._sample_data:make_sample_data
-      title: Load sample data from Orthogonal Views
-    - id: napari-orthogonal-views.make_container_widget
-      python_name: napari_orthogonal_views:ImageThreshold
-      title: Make threshold Container widget
-    - id: napari-orthogonal-views.make_magic_widget
-      python_name: napari_orthogonal_views:threshold_magic_widget
-      title: Make threshold magic widget
-    - id: napari-orthogonal-views.make_function_widget
-      python_name: napari_orthogonal_views:threshold_autogenerate_widget
-      title: Make threshold function widget
-    - id: napari-orthogonal-views.make_qwidget
-      python_name: napari_orthogonal_views:ExampleQWidget
-      title: Make example QWidget
-  readers:
-    - command: napari-orthogonal-views.get_reader
-      accepts_directories: false
-      filename_patterns: ['*.npy']
-  writers:
-    - command: napari-orthogonal-views.write_multiple
-      layer_types: ['image*','labels*']
-      filename_extensions: []
-    - command: napari-orthogonal-views.write_single_image
-      layer_types: ['image']
-      filename_extensions: ['.npy']
-  sample_data:
-    - command: napari-orthogonal-views.make_sample_data
-      display_name: Orthogonal Views
-      key: unique_id.1
+    - id: napari-orthogonal-views.show_orth_views
+      python_name: napari_orthogonal_views:MultipleViewerWidget
+      title: Show orthogonal views
+    - id: napari-orthogonal-views.show_crosshairs
+      python_name: napari_orthogonal_views:CrossWidget
+      title: Show crosshairs
   widgets:
-    - command: napari-orthogonal-views.make_container_widget
-      display_name: Container Threshold
-    - command: napari-orthogonal-views.make_magic_widget
-      display_name: Magic Threshold
-    - command: napari-orthogonal-views.make_function_widget
-      autogenerate: true
-      display_name: Autogenerate Threshold
-    - command: napari-orthogonal-views.make_qwidget
-      display_name: Example QWidget
+    - command: napari-orthogonal-views.show_orth_views
+      display_name: Orthogonal Views
+    - command: napari-orthogonal-views.show_crosshairs
+      display_name: Show crosshairs
