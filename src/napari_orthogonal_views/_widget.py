@@ -1,3 +1,5 @@
+from types import MethodType
+
 import napari
 from napari.components.viewer_model import ViewerModel
 from napari.layers import Labels, Layer
@@ -14,10 +16,11 @@ from qtpy.QtWidgets import (
 def copy_layer(layer: Layer, name: str = ""):
     res_layer = Layer.create(*layer.as_layer_data_tuple())
     res_layer.metadata["viewer_name"] = name
+
+    # connect to the same undo/redo history in the case of labels layers
     if isinstance(layer, Labels):
-        res_layer._undo_history = (
-            layer._undo_history
-        )  # connect to the same undo history
+        res_layer._undo_history = layer._undo_history
+        res_layer._redo_history = layer._redo_history
     return res_layer
 
 
@@ -102,11 +105,36 @@ class ViewerModelContainer:
             )
 
         if isinstance(orig_layer, Labels):
+
+            # Calling the Undo/Redo function on the labels layer should also refresh the
+            # other views.
+            def wrap_undo_redo(
+                source_layer: Labels, target_layer: Labels, update_fn
+            ):
+                """Wrap undo and redo methods to trigger syncing via update_fn"""
+                orig_undo = source_layer.undo
+                orig_redo = source_layer.redo
+
+                def wrapped_undo(self):
+                    orig_undo()
+                    update_fn(source=self, target=target_layer, event=None)
+
+                def wrapped_redo(self):
+                    orig_redo()
+                    update_fn(source=self, target=target_layer, event=None)
+
+                # Replace methods on the instance
+                source_layer.undo = MethodType(wrapped_undo, source_layer)
+                source_layer.redo = MethodType(wrapped_redo, source_layer)
+
+            # Wrap undo/redo
+            wrap_undo_redo(copied_layer, orig_layer, self.update_data)
+            wrap_undo_redo(orig_layer, copied_layer, self.update_data)
+
             # if the original layer is a labels layer, we want to connect to the paint event,
             # because we need it in order to invoke syncing between the different viewers.
             # (Paint event does not trigger 'data' event by itself).
             # We do not need to connect to the eraser and fill bucket separately.
-
             copied_layer.events.paint.connect(
                 lambda event: self.update_data(
                     source=copied_layer, target=orig_layer, event=event
