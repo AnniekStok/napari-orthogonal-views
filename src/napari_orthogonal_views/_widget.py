@@ -1,51 +1,23 @@
-import time
-
 import napari
 from napari.components.viewer_model import ViewerModel
-from napari.layers import Labels, Layer, Points, Shapes, Tracks
+from napari.layers import Labels, Layer
 from napari.qt import QtViewer
+from napari.utils.action_manager import action_manager
 from napari.utils.events import Event
 from napari.utils.events.event import WarningEmitter
+from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
-    QVBoxLayout,
-    QWidget,
+    QSplitter,
 )
 
 
 def copy_layer(layer: Layer, name: str = ""):
-    if isinstance(
-        layer, Tracks
-    ):  # instead of showing the tracks (not very useful on 3D data because they are collapsed to a single frame),
-        # use an empty shapes layer as substitute to ensure that the layer indices in the orthogonal viewer models
-        # match with those in the main viewer
-        res_layer = Shapes(
-            name=layer.name,
-            data=[],
-        )
-
-    elif isinstance(layer, Labels):
-        res_layer = Labels(
-            data=layer.data,
-            name=layer.name,
-            opacity=layer.opacity,
-            scale=layer.scale,
-        )
-    elif isinstance(layer, Points):
-        res_layer = Points(
-            data=layer.data,
-            name=layer.name,
-            symbol=layer.symbol,
-            # face_color=layer.face_color,
-            size=layer.size,
-            properties=layer.properties,
-            # border_color=layer.border_color,
-            scale=layer.scale,
-            blending="translucent_no_depth",
-        )
-    else:
-        res_layer = Layer.create(*layer.as_layer_data_tuple())
-
+    res_layer = Layer.create(*layer.as_layer_data_tuple())
     res_layer.metadata["viewer_name"] = name
+    if isinstance(layer, Labels):
+        res_layer._undo_history = (
+            layer._undo_history
+        )  # connect to the same undo history
     return res_layer
 
 
@@ -65,6 +37,9 @@ def get_property_names(layer: Layer):
     return res
 
 
+action_manager.bind_shortcut("napari:move_point", "C")
+
+
 class own_partial:
     """
     Workaround for deepcopy not copying partial functions
@@ -82,7 +57,7 @@ class own_partial:
 
 class ViewerModelContainer:
     """
-    A container that holds a ViewerModel and manages synchronization across different views.
+    A dockable container that holds a ViewerModel and manages synchronization.
     """
 
     def __init__(self, title: str, rel_order: tuple[int]):
@@ -106,54 +81,28 @@ class ViewerModelContainer:
         orig_layer.events.name.connect(sync_name_wrapper)
 
         # sync properties
-        if not isinstance(orig_layer, Tracks):  # ignore Tracks layers
-            for property_name in get_property_names(orig_layer):
-                # sync forward (from original layer to copied layer)
-                if not (
-                    isinstance(orig_layer, Points) and property_name == "data"
-                ):  # we will sync data separately on Points as we need finer control
-                    getattr(orig_layer.events, property_name).connect(
-                        own_partial(
-                            self.sync_property,
-                            property_name,
-                            orig_layer,
-                            copied_layer,
-                        )
-                    )
+        for property_name in get_property_names(orig_layer):
+            # sync in both directions (from original layer to copied layer and back)
+            getattr(orig_layer.events, property_name).connect(
+                own_partial(
+                    self.sync_property,
+                    property_name,
+                    orig_layer,
+                    copied_layer,
+                )
+            )
 
-                # in the case of a Labels or Points layer, sync only specific properties backwards. Otherwise, sync all properties
-                if not isinstance(
-                    orig_layer, (Labels | Points)
-                ) or property_name in (
-                    "mode",
-                    "selected_label",
-                    "n_edit_dimensions",
-                    "brush_size",
-                ):
-                    getattr(copied_layer.events, property_name).connect(
-                        own_partial(
-                            self.sync_property,
-                            property_name,
-                            copied_layer,
-                            orig_layer,
-                        )
-                    )
-
-        # forward click events and key binds in the case of Labels and Points layers
-        # if isinstance(orig_layer, (Labels | Points)):
-
-        # def click_wrapper(layer, event):
-        #     # Access orig_layer here
-        #     return self.click(orig_layer, layer, event)
-
-        # copied_layer.mouse_drag_callbacks.append(click_wrapper)
-
-        # copied_layer.bind_key("q")(orig_layer.tracks_viewer.toggle_display_mode)
-        # copied_layer.bind_key("z")(orig_layer.tracks_viewer.undo)
-        # copied_layer.bind_key("r")(orig_layer.tracks_viewer.redo)
+            getattr(copied_layer.events, property_name).connect(
+                own_partial(
+                    self.sync_property,
+                    property_name,
+                    copied_layer,
+                    orig_layer,
+                )
+            )
 
         if isinstance(orig_layer, Labels):
-            # if the original layer is a normal labels layer, we still want to connect to the paint event,
+            # if the original layer is a labels layer, we want to connect to the paint event,
             # because we need it in order to invoke syncing between the different viewers.
             # (Paint event does not trigger 'data' event by itself).
             # We do not need to connect to the eraser and fill bucket separately.
@@ -169,26 +118,6 @@ class ViewerModelContainer:
                 )  # copy data from orig_layer to copied_layer (copied_layer emits signal but we don't process it)
             )
 
-        # if the original layer is a Points layer, make sure the visible points are synced (when switching between 'all' and 'lineage' mode)
-        # and make sure that moving a point forwards the event to the original layer for processing (or resetting, if a seg_layer is present)
-        elif isinstance(orig_layer, Points):
-
-            def shown_points_wrapper(event):
-                return self.sync_shown_points(orig_layer, copied_layer)
-
-            orig_layer.events.border_color.connect(shown_points_wrapper)
-
-            # def receive_data_wrapper():
-            #     return self.receive_data(orig_layer, copied_layer)
-
-            # orig_layer.data_updated.connect(receive_data_wrapper)
-
-            def sync_data_wrapper(event):
-                return self.sync_data_event(orig_layer, copied_layer, event)
-
-            copied_layer._sync_data_wrapper = sync_data_wrapper
-            copied_layer.events.data.connect(sync_data_wrapper)
-
     def update_data(
         self, source: Labels, target: Labels, event: Event
     ) -> None:
@@ -203,97 +132,11 @@ class ViewerModelContainer:
             source.data
         )  # trigger data event so that it can sync to other viewer models (only if target layer is orig_layer)
         self._block = False
-        target.refresh()
-
-    def receive_data(self, orig_layer: Points, copied_layer: Points) -> None:
-        """Respond to signal from the original layer, to update the data"""
-
-        copied_layer.events.data.disconnect(copied_layer._sync_data_wrapper)
-        copied_layer.data = orig_layer.data
-        copied_layer.events.data.connect(copied_layer._sync_data_wrapper)
-
-    def sync_data_event(
-        self, orig_layer: Points, copied_layer: Points, event: Event
-    ) -> None:
-        """Send the event that is emitted when a point is moved or deleted to the original layer"""
-
-        if hasattr(event, "action") and event.action in (
-            "added",
-            "changed",
-            "removed",
-        ):
-            with (
-                orig_layer.events.blocker_all()
-            ):  # try to suppress updating visibility
-                orig_layer.selected_data = (
-                    copied_layer.selected_data
-                )  # make sure the same data is selected
-            orig_layer._update_data(event)
-
-    def sync_shown_points(
-        self, orig_layer: Points, copied_layer: Points
-    ) -> None:
-        """Sync the visible points between original Points layer and Points layers in ViewerModel instances (this is not a synced property)"""
-
-        with copied_layer.events.blocker_all():
-            copied_layer.size = orig_layer.size
-            copied_layer.shown = orig_layer.shown
-
-        copied_layer.refresh()
 
     def sync_name(self, orig_layer: Layer, copied_layer: Layer, event: Event):
         """Forward the renaming event from original layer to copied layer"""
 
         copied_layer.name = orig_layer.name
-
-    def sync_paint(self, orig_layer: Labels, event: Event):
-        """Sync paint event to original Labels instance"""
-
-        orig_layer._on_paint(event)
-
-    def click(
-        self,
-        orig_layer: Labels | Points,
-        layer: Labels | Points,
-        event: Event,
-    ):
-        """Forward the click event from the ViewerModel to the original TracksLabels layer
-        args:
-            orig_layer: original Labels or Points layer
-            layer: the Labels or Points layer on this ViewerModel
-            event: the click event
-        """
-        if layer.mode == "pan_zoom":
-            mouse_press_time = time.time()
-            dragged = False
-            yield
-            # on move
-            while event.type == "mouse_move":
-                dragged = True
-                yield
-            if dragged and time.time() - mouse_press_time < 0.5:
-                dragged = (
-                    False  # suppress micro drag events and treat them as click
-                )
-            # on release
-            if not dragged:
-                if isinstance(layer, Labels):
-                    label = layer.get_value(
-                        event.position,
-                        view_direction=event.view_direction,
-                        dims_displayed=event.dims_displayed,
-                        world=True,
-                    )
-                    orig_layer.process_click(event, label)
-
-                if isinstance(layer, Points):
-                    point_index = layer.get_value(
-                        event.position,
-                        view_direction=event.view_direction,
-                        dims_displayed=event.dims_displayed,
-                        world=True,
-                    )
-                    orig_layer.process_point_click(point_index, event)
 
     def sync_property(
         self,
@@ -316,7 +159,7 @@ class ViewerModelContainer:
         self._block = False
 
 
-class MultipleViewerWidget(QWidget):
+class MultipleViewerWidget(QSplitter):
     """The main widget of the example."""
 
     def __init__(self, viewer: napari.Viewer):
@@ -332,12 +175,13 @@ class MultipleViewerWidget(QWidget):
         )
         self.qt_viewer1 = QtViewer(self.viewer_model1.viewer_model)
         self.qt_viewer2 = QtViewer(self.viewer_model2.viewer_model)
-        viewer_splitter = QVBoxLayout()
+        viewer_splitter = QSplitter()
+        viewer_splitter.setOrientation(Qt.Vertical)
         viewer_splitter.addWidget(self.qt_viewer1)
         viewer_splitter.addWidget(self.qt_viewer2)
         viewer_splitter.setContentsMargins(0, 0, 0, 0)
 
-        self.setLayout(viewer_splitter)
+        self.addWidget(viewer_splitter)
 
         # Add the layers currently in the viewer
         for i, layer in enumerate(self.viewer.layers):
