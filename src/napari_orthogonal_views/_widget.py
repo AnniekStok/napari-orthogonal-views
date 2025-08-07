@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from types import MethodType
 
 import napari
@@ -109,7 +110,7 @@ class ViewerModelContainer:
             # Calling the Undo/Redo function on the labels layer should also refresh the
             # other views.
             def wrap_undo_redo(
-                source_layer: Labels, target_layer: Labels, update_fn
+                source_layer: Labels, target_layer: Labels, update_fn: Callable
             ):
                 """Wrap undo and redo methods to trigger syncing via update_fn"""
                 orig_undo = source_layer.undo
