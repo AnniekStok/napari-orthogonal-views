@@ -1,16 +1,9 @@
 name: napari-orthogonal-views
 display_name: Orthogonal Views
 visibility: public
+
 contributions:
   commands:
-    - id: napari-orthogonal-views.show_orth_views
-      python_name: napari_orthogonal_views:MultipleViewerWidget
-      title: Show orthogonal views
-    - id: napari-orthogonal-views.show_crosshairs
-      python_name: napari_orthogonal_views:CrossWidget
-      title: Show crosshairs
-  widgets:
-    - command: napari-orthogonal-views.show_orth_views
-      display_name: Orthogonal Views
-    - command: napari-orthogonal-views.show_crosshairs
-      display_name: Show crosshairs
+    - id: napari-orthogonal-views.toggle
+      python_name: napari_orthogonal_views.layout:toggle_orthogonal_views
+      title: Toggle Orthogonal Views

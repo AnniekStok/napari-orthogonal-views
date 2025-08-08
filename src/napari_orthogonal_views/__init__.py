@@ -3,7 +3,7 @@ try:
 except ImportError:
     __version__ = "unknown"
 
-from ._widget import MultipleViewerWidget
+from ._widget import OrthViewerWidget
 from .cross_widget import CrossWidget
 
-__all__ = ("MultipleViewerWidget", "CrossWidget")
+__all__ = ("OrthViewerWidget", "CrossWidget")

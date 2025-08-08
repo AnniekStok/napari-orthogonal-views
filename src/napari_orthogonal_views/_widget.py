@@ -8,9 +8,10 @@ from napari.qt import QtViewer
 from napari.utils.action_manager import action_manager
 from napari.utils.events import Event
 from napari.utils.events.event import WarningEmitter
-from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
+    QHBoxLayout,
     QSplitter,
+    QWidget,
 )
 
 
@@ -64,11 +65,15 @@ class ViewerModelContainer:
     A dockable container that holds a ViewerModel and manages synchronization.
     """
 
-    def __init__(self, title: str, rel_order: tuple[int]):
+    def __init__(
+        self, title: str, rel_order: tuple[int], transpose: bool = False
+    ):
         self.title = title
         self.rel_order = rel_order
         self.viewer_model = ViewerModel(title)
         self.viewer_model.axes.visible = True
+        if transpose:
+            self.viewer_model.dims.transpose()
         self._block = False
 
     def add_layer(self, orig_layer: Layer, index: int):
@@ -188,34 +193,38 @@ class ViewerModelContainer:
         self._block = False
 
 
-class MultipleViewerWidget(QSplitter):
-    """The main widget of the example."""
+class OrthViewerWidget(QWidget):
+    """Secondary viewer widget to hold another canvas showing the same data as the viewer but in a different orientation."""
 
-    def __init__(self, viewer: napari.Viewer):
+    def __init__(
+        self,
+        viewer: napari.Viewer,
+        order=(-2, -3, -1),
+        sync_axes: list[int] = [0],
+    ):
         super().__init__()
         self.viewer = viewer
         self.viewer.axes.visible = True
         self.viewer.axes.events.visible.connect(self.set_orth_views_dims_order)
         self.viewer_model1 = ViewerModelContainer(
-            title="model1", rel_order=(-2, -3, -1)
+            title="model1", rel_order=order
         )
-        self.viewer_model2 = ViewerModelContainer(
-            title="model2", rel_order=(-1, -2, -3)
-        )
-        self.qt_viewer1 = QtViewer(self.viewer_model1.viewer_model)
-        self.qt_viewer2 = QtViewer(self.viewer_model2.viewer_model)
-        viewer_splitter = QSplitter()
-        viewer_splitter.setOrientation(Qt.Vertical)
-        viewer_splitter.addWidget(self.qt_viewer1)
-        viewer_splitter.addWidget(self.qt_viewer2)
-        viewer_splitter.setContentsMargins(0, 0, 0, 0)
 
-        self.addWidget(viewer_splitter)
+        self.sync_axes = sync_axes
+        self._block_zoom = False
+        self._block_center = False  # Separate flag from zoom
+
+        self.qt_viewer1 = QtViewer(self.viewer_model1.viewer_model)
+        viewer_splitter = QSplitter()
+
+        layout = QHBoxLayout()
+        layout.addWidget(self.qt_viewer1)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.setLayout(layout)
 
         # Add the layers currently in the viewer
         for i, layer in enumerate(self.viewer.layers):
             self.viewer_model1.add_layer(layer, i)
-            self.viewer_model2.add_layer(layer, i)
 
         # Connect to events
         self.viewer.layers.events.inserted.connect(self._layer_added)
@@ -229,12 +238,75 @@ class MultipleViewerWidget(QSplitter):
         self.viewer_model1.viewer_model.dims.events.current_step.connect(
             self._update_current_step
         )
-        self.viewer_model2.viewer_model.dims.events.current_step.connect(
-            self._update_current_step
+
+        self.viewer.camera.events.zoom.connect(
+            lambda e: self.sync_camera(
+                "zoom",
+                self.viewer.camera,
+                self.viewer_model1.viewer_model.camera,
+            )
+        )
+        self.viewer_model1.viewer_model.camera.events.zoom.connect(
+            lambda e: self.sync_camera(
+                "zoom",
+                self.viewer_model1.viewer_model.camera,
+                self.viewer.camera,
+            )
+        )
+
+        # Sync camera center
+        self.viewer.camera.events.center.connect(self._on_main_center)
+        self.viewer_model1.viewer_model.camera.events.center.connect(
+            self._on_ortho_center
         )
 
         # Adjust dimensions for orthogonal views
         self.set_orth_views_dims_order()
+
+    def sync_camera(
+        self, property_name: str, source: ViewerModel, target: ViewerModel
+    ):
+        """Sync a camera property from source to target"""
+        if self._block_zoom:
+            return
+
+        self._block_zoom = True
+        try:
+            setattr(target, property_name, getattr(source, property_name))
+        finally:
+            self._block_zoom = False
+
+    def _on_main_center(self, event=None):
+        if self._block_center:
+            return
+
+        self._block_center = True
+        try:
+            main_center = list(self.viewer.camera.center)
+            ortho_center = list(self.viewer_model1.viewer_model.camera.center)
+
+            for ax in self.sync_axes:
+                ortho_center[ax] = main_center[ax]
+
+            self.viewer_model1.viewer_model.camera.center = tuple(ortho_center)
+        finally:
+            self._block_center = False
+
+    def _on_ortho_center(self, event=None):
+        if self._block_center:
+            return
+
+        self._block_center = True
+        try:
+            ortho_center = list(self.viewer_model1.viewer_model.camera.center)
+            main_center = list(self.viewer.camera.center)
+
+            for ax in self.sync_axes:
+                main_center[ax] = ortho_center[ax]
+
+            self.viewer.camera.center = tuple(main_center)
+        finally:
+            self._block_center = False
 
     def set_orth_views_dims_order(self):
         """The the order of the z,y,x dims in the orthogonal views, by using the rel_order attribute of the viewer models"""
@@ -258,50 +330,31 @@ class MultipleViewerWidget(QSplitter):
             )
             self.viewer_model1.viewer_model.dims.order = m1_order
 
-            # model 2 axis order (e.g. yz view)
-            m2_order = list(order)
-            m2_order[-3:] = (
-                m2_order[self.viewer_model2.rel_order[0]],
-                m2_order[self.viewer_model2.rel_order[1]],
-                m2_order[self.viewer_model2.rel_order[2]],
-            )
-
-            self.viewer_model2.viewer_model.dims.order = m2_order
-
         if len(order) == 3:  # assume we have zyx axes
             self.viewer.dims.axis_labels = axis_labels[1:]
             self.viewer_model1.viewer_model.dims.axis_labels = axis_labels[1:]
-            self.viewer_model2.viewer_model.dims.axis_labels = axis_labels[1:]
         elif len(order) == 4:  # assume we have tzyx axes
             self.viewer.dims.axis_labels = axis_labels
             self.viewer_model1.viewer_model.dims.axis_labels = axis_labels
-            self.viewer_model2.viewer_model.dims.axis_labels = axis_labels
 
         # whether or not the axis should be visible
         self.viewer_model1.viewer_model.axes.visible = self.viewer.axes.visible
-        self.viewer_model2.viewer_model.axes.visible = self.viewer.axes.visible
 
     def _reset_view(self):
         """Propagate the reset view event"""
 
         self.viewer_model1.viewer_model.reset_view()
-        self.viewer_model2.viewer_model.reset_view()
 
     def _layer_selection_changed(self, event):
         """Update of current active layers"""
 
         if event.value is None:
             self.viewer_model1.viewer_model.layers.selection.active = None
-            self.viewer_model2.viewer_model.layers.selection.active = None
             return
 
         if event.value.name in self.viewer_model1.viewer_model.layers:
             self.viewer_model1.viewer_model.layers.selection.active = (
                 self.viewer_model1.viewer_model.layers[event.value.name]
-            )
-        if event.value.name in self.viewer_model2.viewer_model.layers:
-            self.viewer_model2.viewer_model.layers.selection.active = (
-                self.viewer_model2.viewer_model.layers[event.value.name]
             )
 
     def _update_current_step(self, event):
@@ -310,7 +363,6 @@ class MultipleViewerWidget(QSplitter):
         for model in [
             self.viewer,
             self.viewer_model1.viewer_model,
-            self.viewer_model2.viewer_model,
         ]:
             if model.dims is event.source:
                 continue
@@ -322,9 +374,6 @@ class MultipleViewerWidget(QSplitter):
         if event.value.name not in self.viewer_model1.viewer_model.layers:
             self.viewer_model1.add_layer(event.value, event.index)
 
-        if event.value.name not in self.viewer_model2.viewer_model.layers:
-            self.viewer_model2.add_layer(event.value, event.index)
-
         self.set_orth_views_dims_order()
 
     def _layer_removed(self, event):
@@ -333,9 +382,6 @@ class MultipleViewerWidget(QSplitter):
         layer_name = event.value.name
         if layer_name in self.viewer_model1.viewer_model.layers:
             self.viewer_model1.viewer_model.layers.pop(layer_name)
-        if layer_name in self.viewer_model2.viewer_model.layers:
-            self.viewer_model2.viewer_model.layers.pop(layer_name)
-
         self.set_orth_views_dims_order()
 
     def _layer_moved(self, event):
@@ -347,4 +393,3 @@ class MultipleViewerWidget(QSplitter):
             else event.new_index + 1
         )
         self.viewer_model1.viewer_model.layers.move(event.index, dest_index)
-        self.viewer_model2.viewer_model.layers.move(event.index, dest_index)
