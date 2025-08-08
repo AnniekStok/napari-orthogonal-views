@@ -1,4 +1,3 @@
-# napari_orthogonal_views/layout.py
 from typing import Dict, Tuple
 
 from napari.viewer import Viewer
@@ -67,14 +66,14 @@ class OrthoViewManager:
         self._original_canvas.setParent(None)  # detach
 
         # Build orthogonal layout (splitters + widgets)
-        right_widget = OrthViewerWidget(
+        self.right_widget = OrthViewerWidget(
             self.viewer, order=(-1, -2, -3), sync_axes=[1]
         )
         h_splitter_top = QSplitter(Qt.Horizontal)
         h_splitter_top.addWidget(self._original_canvas)
-        h_splitter_top.addWidget(right_widget)
+        h_splitter_top.addWidget(self.right_widget)
 
-        bottom_widget = OrthViewerWidget(
+        self.bottom_widget = OrthViewerWidget(
             self.viewer, order=(-2, -3, -1), sync_axes=[2]
         )
         cross_widget = CrossWidget(self.viewer)
@@ -85,7 +84,7 @@ class OrthoViewManager:
         bottom_right_widget.setLayout(br_layout)
 
         h_splitter_bottom = QSplitter(Qt.Horizontal)
-        h_splitter_bottom.addWidget(bottom_widget)
+        h_splitter_bottom.addWidget(self.bottom_widget)
         h_splitter_bottom.addWidget(bottom_right_widget)
 
         # Compute sensible starting sizes
@@ -148,6 +147,8 @@ class OrthoViewManager:
 
         # Remove the orthogonal container
         if self._container is not None:
+            self.right_widget.cleanup()
+            self.bottom_widget.cleanup()
             layout.removeWidget(self._container)
             self._container.deleteLater()
             self._container = None

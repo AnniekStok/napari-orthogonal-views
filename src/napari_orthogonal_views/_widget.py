@@ -5,12 +5,10 @@ import napari
 from napari.components.viewer_model import ViewerModel
 from napari.layers import Labels, Layer
 from napari.qt import QtViewer
-from napari.utils.action_manager import action_manager
 from napari.utils.events import Event
 from napari.utils.events.event import WarningEmitter
 from qtpy.QtWidgets import (
     QHBoxLayout,
-    QSplitter,
     QWidget,
 )
 
@@ -42,9 +40,6 @@ def get_property_names(layer: Layer):
     return res
 
 
-action_manager.bind_shortcut("napari:move_point", "C")
-
-
 class own_partial:
     """
     Workaround for deepcopy not copying partial functions
@@ -62,18 +57,14 @@ class own_partial:
 
 class ViewerModelContainer:
     """
-    A dockable container that holds a ViewerModel and manages synchronization.
+    A container that holds a ViewerModel and manages synchronization.
     """
 
-    def __init__(
-        self, title: str, rel_order: tuple[int], transpose: bool = False
-    ):
+    def __init__(self, title: str, rel_order: tuple[int]):
         self.title = title
         self.rel_order = rel_order
         self.viewer_model = ViewerModel(title)
         self.viewer_model.axes.visible = True
-        if transpose:
-            self.viewer_model.dims.transpose()
         self._block = False
 
     def add_layer(self, orig_layer: Layer, index: int):
@@ -206,62 +197,131 @@ class OrthViewerWidget(QWidget):
         self.viewer = viewer
         self.viewer.axes.visible = True
         self.viewer.axes.events.visible.connect(self.set_orth_views_dims_order)
-        self.viewer_model1 = ViewerModelContainer(
-            title="model1", rel_order=order
+        self.vm_container = ViewerModelContainer(
+            title="orthogonal view", rel_order=order
         )
 
         self.sync_axes = sync_axes
         self._block_zoom = False
         self._block_center = False  # Separate flag from zoom
 
-        self.qt_viewer1 = QtViewer(self.viewer_model1.viewer_model)
-        viewer_splitter = QSplitter()
+        self.qt_viewer = QtViewer(self.vm_container.viewer_model)
 
         layout = QHBoxLayout()
-        layout.addWidget(self.qt_viewer1)
+        layout.addWidget(self.qt_viewer)
         layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(layout)
 
         # Add the layers currently in the viewer
         for i, layer in enumerate(self.viewer.layers):
-            self.viewer_model1.add_layer(layer, i)
+            self.vm_container.add_layer(layer, i)
 
         # Connect to events
-        self.viewer.layers.events.inserted.connect(self._layer_added)
-        self.viewer.layers.events.removed.connect(self._layer_removed)
-        self.viewer.layers.events.moved.connect(self._layer_moved)
-        self.viewer.layers.selection.events.active.connect(
-            self._layer_selection_changed
+        self._connections = []
+        self._connect(self.viewer.layers.events, "inserted", self._layer_added)
+        self._connect(
+            self.viewer.layers.events, "removed", self._layer_removed
         )
-        self.viewer.events.reset_view.connect(self._reset_view)
-        self.viewer.dims.events.current_step.connect(self._update_current_step)
-        self.viewer_model1.viewer_model.dims.events.current_step.connect(
-            self._update_current_step
+        self._connect(self.viewer.layers.events, "moved", self._layer_moved)
+        self._connect(
+            self.viewer.layers.selection.events,
+            "active",
+            self._layer_selection_changed,
         )
+        self._connect(self.viewer.events, "reset_view", self._reset_view)
+        self._connect(
+            self.viewer.dims.events, "current_step", self._update_current_step
+        )
+        for event in ("zoom", "center"):
+            self._connect_camera_event(
+                event,
+                self.viewer.camera,
+                self.vm_container.viewer_model.camera,
+            )
+            self._connect_camera_event(
+                event,
+                self.vm_container.viewer_model.camera,
+                self.viewer.camera,
+            )
 
-        self.viewer.camera.events.zoom.connect(
-            lambda e: self.sync_camera(
-                "zoom",
-                self.viewer.camera,
-                self.viewer_model1.viewer_model.camera,
-            )
-        )
-        self.viewer_model1.viewer_model.camera.events.zoom.connect(
-            lambda e: self.sync_camera(
-                "zoom",
-                self.viewer_model1.viewer_model.camera,
-                self.viewer.camera,
-            )
-        )
+        # self.viewer.layers.events.inserted.connect(self._layer_added)
+        # self.viewer.layers.events.removed.connect(self._layer_removed)
+        # self.viewer.layers.events.moved.connect(self._layer_moved)
+        # self.viewer.layers.selection.events.active.connect(
+        #     self._layer_selection_changed
+        # )
+        # self.viewer.events.reset_view.connect(self._reset_view)
+        # self.viewer.dims.events.current_step.connect(self._update_current_step)
+        # self.vm_container.viewer_model.dims.events.current_step.connect(
+        #     self._update_current_step
+        # )
+
+        # self.viewer.camera.events.zoom.connect(
+        #     lambda e: self.sync_camera(
+        #         "zoom",
+        #         self.viewer.camera,
+        #         self.vm_container.viewer_model.camera,
+        #     )
+        # )
+        # self.vm_container.viewer_model.camera.events.zoom.connect(
+        #     lambda e: self.sync_camera(
+        #         "zoom",
+        #         self.vm_container.viewer_model.camera,
+        #         self.viewer.camera,
+        #     )
+        # )
 
         # Sync camera center
-        self.viewer.camera.events.center.connect(self._on_main_center)
-        self.viewer_model1.viewer_model.camera.events.center.connect(
-            self._on_ortho_center
-        )
+        # self.viewer.camera.events.center.connect(self._on_main_center)
+        # self.vm_container.viewer_model.camera.events.center.connect(
+        #     self._on_ortho_center
+        # )
 
         # Adjust dimensions for orthogonal views
         self.set_orth_views_dims_order()
+
+    def _connect_camera_event(self, event_name, source_camera, target_camera):
+        """Connects a camera event from source to target and stores the handler for later disconnection."""
+        if event_name == "zoom":
+            handler = lambda e: self.sync_camera(
+                "zoom",
+                source_camera,
+                target_camera,
+            )
+        elif event_name == "center":
+
+            def handler(event=None):
+                if self._block_center:
+                    return
+                self._block_center = True
+                try:
+                    src_center = list(source_camera.center)
+                    tgt_center = list(target_camera.center)
+
+                    for ax in self.sync_axes:
+                        tgt_center[ax] = src_center[ax]
+
+                    target_camera.center = tuple(tgt_center)
+                finally:
+                    self._block_center = False
+
+        else:
+            raise ValueError(f"Unsupported camera event: {event_name}")
+
+        self._connect(source_camera.events, event_name, handler)
+
+    def _connect(self, emitter, signal_name, handler):
+        sig = getattr(emitter, signal_name)
+        sig.connect(handler)
+        self._connections.append((sig, handler))
+
+    def cleanup(self):
+        for sig, handler in self._connections:
+            try:
+                sig.disconnect(handler)
+            except Exception:
+                pass
+        self._connections.clear()
 
     def sync_camera(
         self, property_name: str, source: ViewerModel, target: ViewerModel
@@ -275,38 +335,6 @@ class OrthViewerWidget(QWidget):
             setattr(target, property_name, getattr(source, property_name))
         finally:
             self._block_zoom = False
-
-    def _on_main_center(self, event=None):
-        if self._block_center:
-            return
-
-        self._block_center = True
-        try:
-            main_center = list(self.viewer.camera.center)
-            ortho_center = list(self.viewer_model1.viewer_model.camera.center)
-
-            for ax in self.sync_axes:
-                ortho_center[ax] = main_center[ax]
-
-            self.viewer_model1.viewer_model.camera.center = tuple(ortho_center)
-        finally:
-            self._block_center = False
-
-    def _on_ortho_center(self, event=None):
-        if self._block_center:
-            return
-
-        self._block_center = True
-        try:
-            ortho_center = list(self.viewer_model1.viewer_model.camera.center)
-            main_center = list(self.viewer.camera.center)
-
-            for ax in self.sync_axes:
-                main_center[ax] = ortho_center[ax]
-
-            self.viewer.camera.center = tuple(main_center)
-        finally:
-            self._block_center = False
 
     def set_orth_views_dims_order(self):
         """The the order of the z,y,x dims in the orthogonal views, by using the rel_order attribute of the viewer models"""
@@ -324,37 +352,37 @@ class OrthViewerWidget(QWidget):
             # model 1 axis order (e.g. xz view)
             m1_order = list(order)
             m1_order[-3:] = (
-                m1_order[self.viewer_model1.rel_order[0]],
-                m1_order[self.viewer_model1.rel_order[1]],
-                m1_order[self.viewer_model1.rel_order[2]],
+                m1_order[self.vm_container.rel_order[0]],
+                m1_order[self.vm_container.rel_order[1]],
+                m1_order[self.vm_container.rel_order[2]],
             )
-            self.viewer_model1.viewer_model.dims.order = m1_order
+            self.vm_container.viewer_model.dims.order = m1_order
 
         if len(order) == 3:  # assume we have zyx axes
             self.viewer.dims.axis_labels = axis_labels[1:]
-            self.viewer_model1.viewer_model.dims.axis_labels = axis_labels[1:]
+            self.vm_container.viewer_model.dims.axis_labels = axis_labels[1:]
         elif len(order) == 4:  # assume we have tzyx axes
             self.viewer.dims.axis_labels = axis_labels
-            self.viewer_model1.viewer_model.dims.axis_labels = axis_labels
+            self.vm_container.viewer_model.dims.axis_labels = axis_labels
 
         # whether or not the axis should be visible
-        self.viewer_model1.viewer_model.axes.visible = self.viewer.axes.visible
+        self.vm_container.viewer_model.axes.visible = self.viewer.axes.visible
 
     def _reset_view(self):
         """Propagate the reset view event"""
 
-        self.viewer_model1.viewer_model.reset_view()
+        self.vm_container.viewer_model.reset_view()
 
     def _layer_selection_changed(self, event):
         """Update of current active layers"""
 
         if event.value is None:
-            self.viewer_model1.viewer_model.layers.selection.active = None
+            self.vm_container.viewer_model.layers.selection.active = None
             return
 
-        if event.value.name in self.viewer_model1.viewer_model.layers:
-            self.viewer_model1.viewer_model.layers.selection.active = (
-                self.viewer_model1.viewer_model.layers[event.value.name]
+        if event.value.name in self.vm_container.viewer_model.layers:
+            self.vm_container.viewer_model.layers.selection.active = (
+                self.vm_container.viewer_model.layers[event.value.name]
             )
 
     def _update_current_step(self, event):
@@ -362,7 +390,7 @@ class OrthViewerWidget(QWidget):
 
         for model in [
             self.viewer,
-            self.viewer_model1.viewer_model,
+            self.vm_container.viewer_model,
         ]:
             if model.dims is event.source:
                 continue
@@ -371,8 +399,8 @@ class OrthViewerWidget(QWidget):
     def _layer_added(self, event):
         """Add layer to additional other viewer models"""
 
-        if event.value.name not in self.viewer_model1.viewer_model.layers:
-            self.viewer_model1.add_layer(event.value, event.index)
+        if event.value.name not in self.vm_container.viewer_model.layers:
+            self.vm_container.add_layer(event.value, event.index)
 
         self.set_orth_views_dims_order()
 
@@ -380,8 +408,8 @@ class OrthViewerWidget(QWidget):
         """Remove layer in all viewer models"""
 
         layer_name = event.value.name
-        if layer_name in self.viewer_model1.viewer_model.layers:
-            self.viewer_model1.viewer_model.layers.pop(layer_name)
+        if layer_name in self.vm_container.viewer_model.layers:
+            self.vm_container.viewer_model.layers.pop(layer_name)
         self.set_orth_views_dims_order()
 
     def _layer_moved(self, event):
@@ -392,4 +420,4 @@ class OrthViewerWidget(QWidget):
             if event.new_index < event.index
             else event.new_index + 1
         )
-        self.viewer_model1.viewer_model.layers.move(event.index, dest_index)
+        self.vm_container.viewer_model.layers.move(event.index, dest_index)
