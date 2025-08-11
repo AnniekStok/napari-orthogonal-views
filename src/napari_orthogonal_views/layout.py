@@ -63,7 +63,6 @@ class OrthoViewManager:
                 "Couldn't locate canvas widget in central layout."
             )
         layout.removeWidget(self._original_canvas)
-        self._original_canvas.setParent(None)  # detach
 
         # Build orthogonal layout (splitters + widgets)
         self.right_widget = OrthViewerWidget(
@@ -124,9 +123,6 @@ class OrthoViewManager:
         _connect_sync(h_splitter_top, h_splitter_bottom)
         _connect_sync(h_splitter_bottom, h_splitter_top)
 
-        central.layout().activate()
-        central.update()
-
         self._shown = True
 
     def hide(self) -> None:
@@ -137,9 +133,6 @@ class OrthoViewManager:
             v_splitter = self._container.layout().itemAt(0).widget()
             h_splitter_top = v_splitter.widget(0)
             canvas = h_splitter_top.widget(0)
-
-            # Detach the canvas so deleting the container doesn't destroy it
-            canvas.setParent(None)
 
         # Restore original central widget layout
         central = self.main_window.centralWidget()
@@ -154,8 +147,6 @@ class OrthoViewManager:
             self.bottom_widget.cleanup()
             self.cross_widget.cleanup()
             layout.removeWidget(self._container)
-            self._container.deleteLater()
-            self._container = None
 
         # Insert the canvas back
         layout.insertWidget(self._original_index, canvas)
@@ -167,10 +158,7 @@ class OrthoViewManager:
             except Exception:
                 pass
         self._splitter_handlers.clear()
-
         self._shown = False
-        central.layout().activate()
-        central.update()
 
 
 # Module-level helpers for napari.yaml entrypoints
