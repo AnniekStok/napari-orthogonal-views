@@ -76,11 +76,11 @@ class OrthoViewManager:
         self.bottom_widget = OrthViewerWidget(
             self.viewer, order=(-2, -3, -1), sync_axes=[2]
         )
-        cross_widget = CrossWidget(self.viewer)
+        self.cross_widget = CrossWidget(self.viewer)
         bottom_right_widget = QWidget()
         br_layout = QVBoxLayout()
         br_layout.setContentsMargins(0, 0, 0, 0)
-        br_layout.addWidget(cross_widget)
+        br_layout.addWidget(self.cross_widget)
         bottom_right_widget.setLayout(br_layout)
 
         h_splitter_bottom = QSplitter(Qt.Horizontal)
@@ -124,6 +124,9 @@ class OrthoViewManager:
         _connect_sync(h_splitter_top, h_splitter_bottom)
         _connect_sync(h_splitter_bottom, h_splitter_top)
 
+        central.layout().activate()
+        central.update()
+
         self._shown = True
 
     def hide(self) -> None:
@@ -149,6 +152,7 @@ class OrthoViewManager:
         if self._container is not None:
             self.right_widget.cleanup()
             self.bottom_widget.cleanup()
+            self.cross_widget.cleanup()
             layout.removeWidget(self._container)
             self._container.deleteLater()
             self._container = None
@@ -165,6 +169,8 @@ class OrthoViewManager:
         self._splitter_handlers.clear()
 
         self._shown = False
+        central.layout().activate()
+        central.update()
 
 
 # Module-level helpers for napari.yaml entrypoints
@@ -193,106 +199,3 @@ def toggle_orthogonal_views(viewer: Viewer) -> None:
         manager.hide()
     else:
         manager.show()
-
-
-# # Store reference to allow hiding/restoring
-# _ortho_container = None
-
-# def toggle_orthogonal_views(viewer: Viewer):
-#     global _ortho_container
-
-#     main_window = viewer.window._qt_window
-
-#     if _ortho_container and _ortho_container.isVisible():
-#         # Just restore the viewer canvas in a fresh central widget
-#         try:
-#             v_splitter = _ortho_container.layout().itemAt(0).widget()
-#             h_splitter_top = v_splitter.widget(0)
-#             canvas = h_splitter_top.widget(0)  # this is where we originally placed it
-#         except Exception as e:
-#             print(f"Error recovering canvas: {e}")
-#             return
-
-#         print(canvas)
-
-#         # Remove canvas from its current parent to avoid widget nesting errors
-#         canvas.setParent(None)
-
-#         central = QWidget()
-#         layout = QVBoxLayout()
-#         layout.setContentsMargins(0, 0, 0, 0)
-#         layout.addWidget(canvas)
-#         central.setLayout(layout)
-#         main_window.setCentralWidget(central)
-
-#         _ortho_container = None
-#         return
-
-#     # -- BUILD ORTHOGONAL LAYOUT --
-#     central = main_window.centralWidget()
-#     original_layout = central.layout()
-#     canvas = original_layout.itemAt(0).widget()
-#     original_layout.removeWidget(canvas)
-
-#     # Ensure canvas is detached from layout
-#     canvas.setParent(None)
-
-#     # Right view
-#     right_widget = OrthViewerWidget(viewer, order=(-1, -2, -3), orientation=Qt.Vertical, sync_axes=[1])
-#     h_splitter_top = QSplitter(Qt.Horizontal)
-#     h_splitter_top.addWidget(canvas)
-#     h_splitter_top.addWidget(right_widget)
-
-#     # Bottom view
-#     bottom_widget = OrthViewerWidget(viewer, order=(-2, -3, -1), orientation=Qt.Horizontal, sync_axes=[2])
-#     cross_widget = CrossWidget(viewer)
-#     bottom_right_widget = QWidget()
-#     bottom_right_layout = QVBoxLayout()
-#     bottom_right_layout.addWidget(cross_widget)
-#     bottom_right_widget.setLayout(bottom_right_layout)
-
-#     h_splitter_bottom = QSplitter(Qt.Horizontal)
-#     h_splitter_bottom.addWidget(bottom_widget)
-#     h_splitter_bottom.addWidget(bottom_right_widget)
-
-#     # Set sizes based on canvas size
-#     canvas_size = canvas.size()
-#     canvas_width = canvas_size.width()
-#     canvas_height = canvas_size.height()
-
-#     print('canvas width at startup', canvas_width, canvas_height)
-#     side_width = int(canvas_width * 0.3)
-#     bottom_height = int(canvas_height * 0.3)
-
-#     h_splitter_top.setSizes([canvas_width, side_width])
-#     h_splitter_bottom.setSizes([canvas_width, side_width])
-
-#     v_splitter = QSplitter(Qt.Vertical)
-#     v_splitter.addWidget(h_splitter_top)
-#     v_splitter.addWidget(h_splitter_bottom)
-#     v_splitter.setSizes([canvas_width, canvas_height])
-
-#     container = QWidget()
-#     layout = QVBoxLayout()
-#     layout.setContentsMargins(0, 0, 0, 0)
-#     layout.addWidget(v_splitter)
-#     container.setLayout(layout)
-#     main_window.setCentralWidget(container)
-#     _ortho_container = container
-#     container.resize(canvas_width, canvas_height)
-
-#     # Sync both top/bottom splitters
-#     sync_splitters(h_splitter_top, h_splitter_bottom)
-#     sync_splitters(h_splitter_bottom, h_splitter_top)
-
-#     print('after creating the splitter', h_splitter_top.sizes())
-#     print('after creating the splitter', h_splitter_bottom.sizes())
-#     print('after creating the splitter', v_splitter.sizes())
-
-#     print(canvas_width, canvas_height)
-
-# def sync_splitters(source_splitter: QSplitter, target_splitter: QSplitter):
-#     def _sync():
-#         sizes = source_splitter.sizes()
-#         target_splitter.setSizes(sizes)
-#     source_splitter.splitterMoved.connect(_sync)
