@@ -244,39 +244,6 @@ class OrthViewerWidget(QWidget):
                 self.viewer.camera,
             )
 
-        # self.viewer.layers.events.inserted.connect(self._layer_added)
-        # self.viewer.layers.events.removed.connect(self._layer_removed)
-        # self.viewer.layers.events.moved.connect(self._layer_moved)
-        # self.viewer.layers.selection.events.active.connect(
-        #     self._layer_selection_changed
-        # )
-        # self.viewer.events.reset_view.connect(self._reset_view)
-        # self.viewer.dims.events.current_step.connect(self._update_current_step)
-        # self.vm_container.viewer_model.dims.events.current_step.connect(
-        #     self._update_current_step
-        # )
-
-        # self.viewer.camera.events.zoom.connect(
-        #     lambda e: self.sync_camera(
-        #         "zoom",
-        #         self.viewer.camera,
-        #         self.vm_container.viewer_model.camera,
-        #     )
-        # )
-        # self.vm_container.viewer_model.camera.events.zoom.connect(
-        #     lambda e: self.sync_camera(
-        #         "zoom",
-        #         self.vm_container.viewer_model.camera,
-        #         self.viewer.camera,
-        #     )
-        # )
-
-        # Sync camera center
-        # self.viewer.camera.events.center.connect(self._on_main_center)
-        # self.vm_container.viewer_model.camera.events.center.connect(
-        #     self._on_ortho_center
-        # )
-
         # Adjust dimensions for orthogonal views
         self.set_orth_views_dims_order()
 
