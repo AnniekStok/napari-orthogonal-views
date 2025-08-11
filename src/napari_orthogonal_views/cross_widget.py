@@ -285,10 +285,9 @@ class CrossWidget(QCheckBox):
     def cleanup(self) -> None:
         """Turn off checkbox, clean up all signal connections."""
 
-        self.setChecked(False)
         for sig, handler in self._connections:
             with contextlib.suppress(ValueError):
                 sig.disconnect(handler)
         self._connections.clear()
-
-        print("clean!")
+        if self.layer is not None and self.layer in self.viewer.layers:
+            self.viewer.layers.remove(self.layer)
