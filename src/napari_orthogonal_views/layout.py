@@ -4,6 +4,7 @@ from napari.viewer import Viewer
 from qtpy.QtCore import QSize, Qt
 from qtpy.QtWidgets import (
     QCheckBox,
+    QGroupBox,
     QLayout,
     QSizePolicy,
     QSplitter,
@@ -16,6 +17,29 @@ from napari_orthogonal_views.cross_widget import CrossWidget
 
 # Keep managers per viewer (so multiple Napari windows are supported)
 _MANAGERS: Dict[int, "OrthoViewManager"] = {}
+
+
+class ControlsWidget(QWidget):
+    def __init__(self, viewer: Viewer, widgets: list[OrthViewerWidget]):
+        super().__init__()
+
+        self.cross_widget = CrossWidget(viewer)
+        self.zoom_widget = ZoomWidget(widgets=widgets)
+        self.center_widget = CenterWidget(widgets=widgets)
+
+        group_box = QGroupBox("Controls")
+        layout = QVBoxLayout()
+
+        layout.addWidget(self.cross_widget)
+        layout.addWidget(self.zoom_widget)
+        layout.addWidget(self.center_widget)
+
+        group_box.setLayout(layout)
+
+        main_layout = QVBoxLayout()
+        main_layout.addWidget(group_box)
+
+        self.setLayout(main_layout)
 
 
 class ZoomWidget(QCheckBox):
@@ -155,19 +179,9 @@ class OrthoViewManager:
         self.bottom_widget = OrthViewerWidget(
             self.viewer, order=(-2, -3, -1), sync_axes=[2]
         )
-        self.controls_widget = QWidget()
-        controls_widget_layout = QVBoxLayout()
-        self.cross_widget = CrossWidget(self.viewer)
-        self.sync_zoom_widget = ZoomWidget(
-            widgets=[self.right_widget, self.bottom_widget]
+        self.controls_widget = ControlsWidget(
+            self.viewer, widgets=[self.right_widget, self.bottom_widget]
         )
-        self.sync_center_widget = CenterWidget(
-            widgets=[self.right_widget, self.bottom_widget]
-        )
-        controls_widget_layout.addWidget(self.cross_widget)
-        controls_widget_layout.addWidget(self.sync_zoom_widget)
-        controls_widget_layout.addWidget(self.sync_center_widget)
-        self.controls_widget.setLayout(controls_widget_layout)
         bottom_right_widget = QWidget()
         br_layout = QVBoxLayout()
         br_layout.setContentsMargins(0, 0, 0, 0)
@@ -274,7 +288,6 @@ def hide_orthogonal_views(viewer: Viewer) -> None:
 def toggle_orthogonal_views(viewer: Viewer) -> None:
     """Toggle orthogonal views"""
     manager = _get_manager(viewer)
-    print(manager.is_shown())
     if manager.is_shown():
         manager.hide()
     else:
