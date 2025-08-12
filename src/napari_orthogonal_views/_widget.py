@@ -1,3 +1,4 @@
+import contextlib
 from collections.abc import Callable
 from types import MethodType
 
@@ -218,69 +219,73 @@ class OrthViewerWidget(QWidget):
 
         # Connect to events
         self._connections = []
-        self._connect(self.viewer.layers.events, "inserted", self._layer_added)
+        self._connect(self.viewer.layers.events.inserted, self._layer_added)
+        self._connect(self.viewer.layers.events.removed, self._layer_removed)
+        self._connect(self.viewer.layers.events.moved, self._layer_moved)
         self._connect(
-            self.viewer.layers.events, "removed", self._layer_removed
-        )
-        self._connect(self.viewer.layers.events, "moved", self._layer_moved)
-        self._connect(
-            self.viewer.layers.selection.events,
-            "active",
+            self.viewer.layers.selection.events.active,
             self._layer_selection_changed,
         )
-        self._connect(self.viewer.events, "reset_view", self._reset_view)
+        self._connect(self.viewer.events.reset_view, self._reset_view)
         self._connect(
-            self.viewer.dims.events, "current_step", self._update_current_step
+            self.viewer.dims.events.current_step, self._update_current_step
         )
-        for event in ("zoom", "center"):
-            self._connect_camera_event(
-                event,
-                self.viewer.camera,
-                self.vm_container.viewer_model.camera,
-            )
-            self._connect_camera_event(
-                event,
-                self.vm_container.viewer_model.camera,
-                self.viewer.camera,
-            )
 
         # Adjust dimensions for orthogonal views
         self.set_orth_views_dims_order()
 
-    def _connect_camera_event(self, event_name, source_camera, target_camera):
-        """Connects a camera event from source to target and stores the handler for later disconnection."""
-        if event_name == "zoom":
-            handler = lambda e: self.sync_camera(
-                "zoom",
-                source_camera,
-                target_camera,
-            )
-        elif event_name == "center":
+    def sync_event(
+        self, source_emitter, target_callable, sync: bool, key_label=None
+    ):
+        """
+        Connect or disconnect an event from a source emitter to a target callable.
 
-            def handler(event=None):
-                if self._block_center:
-                    return
-                self._block_center = True
-                try:
-                    src_center = list(source_camera.center)
-                    tgt_center = list(target_camera.center)
+        Parameters
+        ----------
+        source_emitter : napari EventEmitter
+            The source event emitter (e.g., viewer.camera.events.zoom).
+        target_callable : callable
+            Function to call when the source event fires.
+            Signature: target_callable(event)
+        sync : bool
+            True to connect, False to disconnect.
+        """
+        if not hasattr(self, "_sync_handlers"):
+            self._sync_handlers = {}
 
-                    for ax in self.sync_axes:
-                        tgt_center[ax] = src_center[ax]
+        if key_label is None:
+            key_label = id(target_callable)
 
-                    target_camera.center = tuple(tgt_center)
-                finally:
-                    self._block_center = False
+        key = (id(source_emitter), key_label)
 
+        if sync:
+            if key in self._sync_handlers:
+                return
+
+            def handler(event, _fn=target_callable):
+                _fn(event)
+
+            self._sync_handlers[key] = handler
+            self._connect(source_emitter, handler)
         else:
-            raise ValueError(f"Unsupported camera event: {event_name}")
+            if key not in self._sync_handlers:
+                return
+            handler = self._sync_handlers.pop(key)
+            self._disconnect(source_emitter, handler)
 
-        self._connect(source_camera.events, event_name, handler)
+    def _connect(self, emitter, handler):
+        emitter.connect(handler)
+        print("current connections", self._connections)
+        self._connections.append((emitter, handler))
+        print("updated connections", self._connections)
 
-    def _connect(self, emitter, signal_name, handler):
-        sig = getattr(emitter, signal_name)
-        sig.connect(handler)
-        self._connections.append((sig, handler))
+    def _disconnect(self, emitter, handler):
+        print(emitter, "is disconnecting")
+        print("current connections", self._connections)
+        with contextlib.suppress(ValueError):
+            emitter.disconnect(handler)
+            self._connections.remove((emitter, handler))
+        print("updated connections", self._connections)
 
     def cleanup(self):
         for sig, handler in self._connections:

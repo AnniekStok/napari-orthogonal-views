@@ -3,6 +3,7 @@ from typing import Dict, Tuple
 from napari.viewer import Viewer
 from qtpy.QtCore import QSize, Qt
 from qtpy.QtWidgets import (
+    QCheckBox,
     QLayout,
     QSizePolicy,
     QSplitter,
@@ -15,6 +16,85 @@ from napari_orthogonal_views.cross_widget import CrossWidget
 
 # Keep managers per viewer (so multiple Napari windows are supported)
 _MANAGERS: Dict[int, "OrthoViewManager"] = {}
+
+
+class ZoomWidget(QCheckBox):
+    """Checkbox to sync/unsync camera zoom"""
+
+    def __init__(self, widgets=list[QWidget]):
+        super().__init__("Sync zoom")
+        self.widgets = widgets
+        self.stateChanged.connect(self.set_zoom_sync)
+
+    def set_zoom_sync(self, state: bool):
+
+        for widget in self.widgets:
+            widget.sync_event(
+                widget.viewer.camera.events.zoom,
+                lambda e, w=widget: setattr(
+                    w.vm_container.viewer_model.camera,
+                    "zoom",
+                    w.viewer.camera.zoom,
+                ),
+                state,
+                key_label="zoom_viewer_to_vm",
+            )
+
+            widget.sync_event(
+                widget.vm_container.viewer_model.camera.events.zoom,
+                lambda e, w=widget: setattr(
+                    w.viewer.camera,
+                    "zoom",
+                    w.vm_container.viewer_model.camera.zoom,
+                ),
+                state,
+                key_label="zoom_vm_to_viewer",
+            )
+
+
+class CenterWidget(QCheckBox):
+    """Checkbox to sync/unsync camera center for specific axes"""
+
+    def __init__(self, widgets=list[QWidget]):
+        super().__init__("Sync center")
+        self.widgets = widgets
+        self.stateChanged.connect(self.set_center_sync)
+
+    def set_center_sync(self, state: bool):
+        for widget in self.widgets:
+
+            def make_handler(w):
+                source_camera = w.viewer.camera
+                target_camera = w.vm_container.viewer_model.camera
+
+                def handler(event=None):
+                    if w._block_center:
+                        return
+                    w._block_center = True
+                    try:
+                        src_center = list(source_camera.center)
+                        tgt_center = list(target_camera.center)
+                        for ax in w.sync_axes:
+                            tgt_center[ax] = src_center[ax]
+                        target_camera.center = tuple(tgt_center)
+                    finally:
+                        w._block_center = False
+
+                return handler
+
+            widget.sync_event(
+                widget.viewer.camera.events.center,
+                make_handler(widget),
+                state,
+                key_label=f"center_viewer_to_vm_{id(widget)}",
+            )
+
+            widget.sync_event(
+                widget.vm_container.viewer_model.camera.events.center,
+                make_handler(widget),  # same factory for reverse direction
+                state,
+                key_label=f"center_vm_to_viewer_{id(widget)}",
+            )
 
 
 class OrthoViewManager:
@@ -75,11 +155,23 @@ class OrthoViewManager:
         self.bottom_widget = OrthViewerWidget(
             self.viewer, order=(-2, -3, -1), sync_axes=[2]
         )
+        self.controls_widget = QWidget()
+        controls_widget_layout = QVBoxLayout()
         self.cross_widget = CrossWidget(self.viewer)
+        self.sync_zoom_widget = ZoomWidget(
+            widgets=[self.right_widget, self.bottom_widget]
+        )
+        self.sync_center_widget = CenterWidget(
+            widgets=[self.right_widget, self.bottom_widget]
+        )
+        controls_widget_layout.addWidget(self.cross_widget)
+        controls_widget_layout.addWidget(self.sync_zoom_widget)
+        controls_widget_layout.addWidget(self.sync_center_widget)
+        self.controls_widget.setLayout(controls_widget_layout)
         bottom_right_widget = QWidget()
         br_layout = QVBoxLayout()
         br_layout.setContentsMargins(0, 0, 0, 0)
-        br_layout.addWidget(self.cross_widget)
+        br_layout.addWidget(self.controls_widget)
         bottom_right_widget.setLayout(br_layout)
 
         h_splitter_bottom = QSplitter(Qt.Horizontal)
