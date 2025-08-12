@@ -185,7 +185,7 @@ class ViewerModelContainer:
         self._block = False
 
 
-class OrthViewerWidget(QWidget):
+class OrthoViewWidget(QWidget):
     """Secondary viewer widget to hold another canvas showing the same data as the viewer but in a different orientation."""
 
     def __init__(
