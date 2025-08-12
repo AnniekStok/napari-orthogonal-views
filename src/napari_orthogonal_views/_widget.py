@@ -129,25 +129,29 @@ class ViewerModelContainer:
             wrap_undo_redo(copied_layer, orig_layer, self.update_data)
             wrap_undo_redo(orig_layer, copied_layer, self.update_data)
 
-            # if the original layer is a labels layer, we want to connect to the paint event,
-            # because we need it in order to invoke syncing between the different viewers.
-            # (Paint event does not trigger 'data' event by itself).
+            # if the original layer is a labels layer, we want to connect to the paint
+            # event, because we need it in order to invoke syncing between the different
+            # viewers. (Paint event does not trigger 'data' event by itself).
             # We do not need to connect to the eraser and fill bucket separately.
             copied_layer.events.paint.connect(
                 lambda event: self.update_data(
                     source=copied_layer, target=orig_layer, event=event
-                )  # copy data from copied_layer to orig_layer (orig_layer emits signal, which triggers update on other viewer models, if present)
+                )  # copy data from copied_layer to orig_layer (orig_layer emits signal,
+                # which triggers update on other viewer models, if present)
             )
             orig_layer.events.paint.connect(
                 lambda event: self.update_data(
                     source=orig_layer, target=copied_layer, event=event
-                )  # copy data from orig_layer to copied_layer (copied_layer emits signal but we don't process it)
+                )  # copy data from orig_layer to copied_layer (copied_layer emits signal
+                # but we don't process it)
             )
 
     def update_data(
         self, source: Labels, target: Labels, event: Event
     ) -> None:
-        """Copy data from source layer to target layer, which triggers a data event on the target layer. Block syncing to itself (VM1 -> orig -> VM1 is blocked, but VM1 -> orig -> VM2 is not blocked)
+        """Copy data from source layer to target layer, which triggers a data event on
+        the target layer. Block syncing to itself (VM1 -> orig -> VM1 is blocked, but
+        VM1 -> orig -> VM2 is not blocked)
         Args:
             source: the source Labels layer
             target: the target Labels layer
@@ -156,7 +160,8 @@ class ViewerModelContainer:
         self._block = True  # no syncing to itself is necessary
         target.data = (
             source.data
-        )  # trigger data event so that it can sync to other viewer models (only if target layer is orig_layer)
+        )  # trigger data event so that it can sync to other viewer models (only if
+        # target layer is orig_layer)
         self._block = False
 
     def sync_name(self, orig_layer: Layer, copied_layer: Layer, event: Event):
@@ -186,28 +191,33 @@ class ViewerModelContainer:
 
 
 class OrthoViewWidget(QWidget):
-    """Secondary viewer widget to hold another canvas showing the same data as the viewer but in a different orientation."""
+    """Secondary viewer widget to hold another canvas showing the same data as the viewer
+    but in a different orientation."""
 
     def __init__(
         self,
         viewer: napari.Viewer,
         order=(-2, -3, -1),
-        sync_axes: list[int] = [0],
+        sync_axes: list[int] | None = None,
     ):
         super().__init__()
         self.viewer = viewer
         self.viewer.axes.visible = True
         self.viewer.axes.events.visible.connect(self.set_orth_views_dims_order)
+        if sync_axes is None:
+            sync_axes = [0]
+        self.sync_axes = sync_axes
+        self._block_center = False
+        self._block_step = False
+
+        # create container to store viewer model in
         self.vm_container = ViewerModelContainer(
             title="orthogonal view", rel_order=order
         )
-
-        self.sync_axes = sync_axes
-        self._block_center = False  # Separate flag from zoom
-        self._block_step = False
-
+        # Create QtViewer instance with viewer model
         self.qt_viewer = QtViewer(self.vm_container.viewer_model)
 
+        # Set layout
         layout = QHBoxLayout()
         layout.addWidget(self.qt_viewer)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -219,6 +229,7 @@ class OrthoViewWidget(QWidget):
 
         # Connect to events
         self._connections = []
+        # Layer events
         self._connect(self.viewer.layers.events.inserted, self._layer_added)
         self._connect(self.viewer.layers.events.removed, self._layer_removed)
         self._connect(self.viewer.layers.events.moved, self._layer_moved)
@@ -226,6 +237,7 @@ class OrthoViewWidget(QWidget):
             self.viewer.layers.selection.events.active,
             self._layer_selection_changed,
         )
+        # Viewer events
         self._connect(self.viewer.events.reset_view, self._reset_view)
         self._connect(
             self.viewer.dims.events.current_step, self._update_current_step
@@ -233,27 +245,32 @@ class OrthoViewWidget(QWidget):
         self._connect(
             self.vm_container.viewer_model.dims.events.current_step,
             self._update_current_step,
-        )
+        )  # reverse dims sync
 
         # Adjust dimensions for orthogonal views
         self.set_orth_views_dims_order()
 
     def sync_event(
-        self, source_emitter, target_callable, sync: bool, key_label=None
+        self,
+        source_emitter,
+        target_callable,
+        sync: bool,
+        key_label: str | None = None,
     ):
         """
         Connect or disconnect an event from a source emitter to a target callable.
 
-        Parameters
-        ----------
-        source_emitter : napari EventEmitter
-            The source event emitter (e.g., viewer.camera.events.zoom).
-        target_callable : callable
-            Function to call when the source event fires.
-            Signature: target_callable(event)
-        sync : bool
-            True to connect, False to disconnect.
+        Args:
+            source_emitter (napari EventEmitter)
+                The source event emitter (e.g., viewer.camera.events.zoom).
+            target_callable (callable)
+                Function to call when the source event fires.
+                Signature: target_callable(event)
+            sync (bool):
+                True to connect, False to disconnect.
+            key_label (str): optional name to store this connection by.
         """
+
         if not hasattr(self, "_sync_handlers"):
             self._sync_handlers = {}
 
@@ -264,7 +281,7 @@ class OrthoViewWidget(QWidget):
 
         if sync:
             if key in self._sync_handlers:
-                return
+                return  # do not allow duplicate connections
 
             def handler(event, _fn=target_callable):
                 _fn(event)
@@ -278,24 +295,32 @@ class OrthoViewWidget(QWidget):
             self._disconnect(source_emitter, handler)
 
     def _connect(self, emitter, handler):
+        """Connect an event emitter to a function handler and add it to the list of
+        connections."""
+
         emitter.connect(handler)
         self._connections.append((emitter, handler))
 
     def _disconnect(self, emitter, handler):
+        """Disconnect an event emitter to a function handler and remove it from the list
+        of connections."""
+
         with contextlib.suppress(ValueError):
             emitter.disconnect(handler)
             self._connections.remove((emitter, handler))
 
     def cleanup(self):
+        """Disconnect from all signals and clear the list"""
+
         for sig, handler in self._connections:
-            try:
+            with contextlib.suppress(ValueError):
                 sig.disconnect(handler)
-            except Exception:
-                pass
+
         self._connections.clear()
 
     def set_orth_views_dims_order(self):
-        """The the order of the z,y,x dims in the orthogonal views, by using the rel_order attribute of the viewer models"""
+        """The the order of the z,y,x dims in the orthogonal views, by using the
+        rel_order attribute of the viewer models"""
 
         # TODO: allow the user to provide the dimension order and names.
         axis_labels = (
@@ -307,14 +332,14 @@ class OrthoViewWidget(QWidget):
         order = list(self.viewer.dims.order)
 
         if len(order) > 2:
-            # model 1 axis order (e.g. xz view)
-            m1_order = list(order)
-            m1_order[-3:] = (
-                m1_order[self.vm_container.rel_order[0]],
-                m1_order[self.vm_container.rel_order[1]],
-                m1_order[self.vm_container.rel_order[2]],
+            # model axis order (e.g. xz view)
+            m_order = list(order)
+            m_order[-3:] = (
+                m_order[self.vm_container.rel_order[0]],
+                m_order[self.vm_container.rel_order[1]],
+                m_order[self.vm_container.rel_order[2]],
             )
-            self.vm_container.viewer_model.dims.order = m1_order
+            self.vm_container.viewer_model.dims.order = m_order
 
         if len(order) == 3:  # assume we have zyx axes
             self.viewer.dims.axis_labels = axis_labels[1:]
@@ -343,22 +368,6 @@ class OrthoViewWidget(QWidget):
                 self.vm_container.viewer_model.layers[event.value.name]
             )
 
-    def _update_current_step(self, event):
-        """Sync the current step between different viewer models"""
-
-        if self._block_center:
-            return
-
-        self._block_center = True
-        for model in [
-            self.viewer,
-            self.vm_container.viewer_model,
-        ]:
-            if model.dims is event.source:
-                continue
-            model.dims.current_step = event.value
-        self._block_center = False
-
     def _layer_added(self, event):
         """Add layer to additional other viewer models"""
 
@@ -384,3 +393,19 @@ class OrthoViewWidget(QWidget):
             else event.new_index + 1
         )
         self.vm_container.viewer_model.layers.move(event.index, dest_index)
+
+    def _update_current_step(self, event):
+        """Sync the current step between different viewer models"""
+
+        if self._block_center:
+            return
+
+        self._block_center = True
+        for model in [
+            self.viewer,
+            self.vm_container.viewer_model,
+        ]:
+            if model.dims is event.source:
+                continue
+            model.dims.current_step = event.value
+        self._block_center = False
