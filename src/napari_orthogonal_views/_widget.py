@@ -203,8 +203,8 @@ class OrthViewerWidget(QWidget):
         )
 
         self.sync_axes = sync_axes
-        self._block_zoom = False
         self._block_center = False  # Separate flag from zoom
+        self._block_step = False
 
         self.qt_viewer = QtViewer(self.vm_container.viewer_model)
 
@@ -229,6 +229,10 @@ class OrthViewerWidget(QWidget):
         self._connect(self.viewer.events.reset_view, self._reset_view)
         self._connect(
             self.viewer.dims.events.current_step, self._update_current_step
+        )
+        self._connect(
+            self.vm_container.viewer_model.dims.events.current_step,
+            self._update_current_step,
         )
 
         # Adjust dimensions for orthogonal views
@@ -275,17 +279,12 @@ class OrthViewerWidget(QWidget):
 
     def _connect(self, emitter, handler):
         emitter.connect(handler)
-        print("current connections", self._connections)
         self._connections.append((emitter, handler))
-        print("updated connections", self._connections)
 
     def _disconnect(self, emitter, handler):
-        print(emitter, "is disconnecting")
-        print("current connections", self._connections)
         with contextlib.suppress(ValueError):
             emitter.disconnect(handler)
             self._connections.remove((emitter, handler))
-        print("updated connections", self._connections)
 
     def cleanup(self):
         for sig, handler in self._connections:
@@ -294,19 +293,6 @@ class OrthViewerWidget(QWidget):
             except Exception:
                 pass
         self._connections.clear()
-
-    def sync_camera(
-        self, property_name: str, source: ViewerModel, target: ViewerModel
-    ):
-        """Sync a camera property from source to target"""
-        if self._block_zoom:
-            return
-
-        self._block_zoom = True
-        try:
-            setattr(target, property_name, getattr(source, property_name))
-        finally:
-            self._block_zoom = False
 
     def set_orth_views_dims_order(self):
         """The the order of the z,y,x dims in the orthogonal views, by using the rel_order attribute of the viewer models"""
@@ -360,6 +346,10 @@ class OrthViewerWidget(QWidget):
     def _update_current_step(self, event):
         """Sync the current step between different viewer models"""
 
+        if self._block_center:
+            return
+
+        self._block_center = True
         for model in [
             self.viewer,
             self.vm_container.viewer_model,
@@ -367,6 +357,7 @@ class OrthViewerWidget(QWidget):
             if model.dims is event.source:
                 continue
             model.dims.current_step = event.value
+        self._block_center = False
 
     def _layer_added(self, event):
         """Add layer to additional other viewer models"""

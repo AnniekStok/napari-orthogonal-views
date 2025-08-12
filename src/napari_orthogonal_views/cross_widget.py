@@ -12,7 +12,6 @@ from napari.utils.notifications import show_info
 from qtpy.QtWidgets import (
     QCheckBox,
 )
-from superqt.utils import qthrottled
 
 
 def center_cross_on_mouse(
@@ -110,6 +109,8 @@ class CrossWidget(QCheckBox):
             self.viewer.layers.events, "removed", self._on_extent_change
         )
 
+        self._connect(self.viewer.dims.events, "range", self._on_extent_change)
+
     def _disconnect_signals(self) -> None:
         """Disconnect from viewer dims changes and inserting/deleting layers"""
 
@@ -125,6 +126,9 @@ class CrossWidget(QCheckBox):
         )
         self._disconnect(
             self.viewer.layers.events, "removed", self._on_extent_change
+        )
+        self._disconnect(
+            self.viewer.dims.events, "range", self._on_extent_change
         )
 
     def _connect(
@@ -179,7 +183,7 @@ class CrossWidget(QCheckBox):
             self._update_extent()
             self._connect_signals()
 
-    @qthrottled(leading=False)
+    # @qthrottled(leading=False)
     def _update_extent(self) -> None:
         """Compute the range the cross layer should cover, then update it."""
 
