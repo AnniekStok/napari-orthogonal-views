@@ -5,5 +5,14 @@ visibility: public
 contributions:
   commands:
     - id: napari-orthogonal-views.toggle
-      python_name: napari_orthogonal_views.layout:toggle_orthogonal_views
+      python_name: napari_orthogonal_views.ortho_view_manager:toggle_orthogonal_views
       title: Toggle Orthogonal Views
+    - id: napari-orthogonal-views.show
+      python_name: napari_orthogonal_views.ortho_view_manager:show_orthogonal_views
+      title: Show Orthogonal Views
+    - id: napari-orthogonal-views.hide
+      python_name: napari_orthogonal_views.ortho_view_manager:hide_orthogonal_views
+      title: Hide Orthogonal Views
+    - id: napari-orthogonal-views.delete_cleanup
+      python_name: napari_orthogonal_views.ortho_view_manager:delete_and_cleanup
+      title: Remove Orthogonal Views

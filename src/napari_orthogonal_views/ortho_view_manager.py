@@ -453,3 +453,10 @@ def toggle_orthogonal_views(viewer: Viewer) -> None:
         QTimer.singleShot(0, m.hide)
     else:
         QTimer.singleShot(0, m.show)
+
+
+def delete_and_cleanup(viewer: Viewer) -> None:
+    """Remove orthoview manager and clean up all connections"""
+
+    m = _get_manager(viewer)
+    m.cleanup()
