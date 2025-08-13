@@ -248,6 +248,7 @@ class CrossWidget(QCheckBox):
             self.layer.edge_color = self.color
             self.layer.vector_style = "line"
             self.layer.edge_width = 2
+            self.layer.blending = "translucent_no_depth"
 
     def _update_cross_visibility(self, state: bool) -> None:
         """Activate/deactivate the crosshairs layer."""
