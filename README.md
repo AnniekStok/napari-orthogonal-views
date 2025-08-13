@@ -41,18 +41,20 @@ Commands are available in Views>Commands Palette (CMD+SHIFT+P):
   - Remove Orthogonal Views
 
 Once shown, it can also be popped up or collapsed using the checkbox in the bottom right corner 'Show orthogonal views'. 
-Alternatively, you can access the 'OrthoViewManager' via the console:
+Alternatively, you can show the orthogonal views via the console:
 
 ```
-from napari_orthogonal_views.ortho_view_manager import show_orthogonal_views, hide_orthogonal_views, _get_manager
+from napari_orthogonal_views.ortho_view_manager import show_orthogonal_views
+show_orthogonal_views(viewer)
+```
+
+And access the OrthoViewManager via _get_manager:
+
+```
+from napari_orthogonal_views.ortho_view_manager import _get_manager
 m = _get_manager(viewer)
-m.show()
 m.is_shown()
 Out[6]: True
-```
-or 
-```
-show_orthogonal_views(viewer)
 ```
 
 The size of the orthogonal view windows can be adjusted by clicking and dragging the small dot in between the views, optionally one or two views can be hidden entirely. The checkboxes in the bottom right corner can be used to show cross hairs or for more control over camera zoom and axis center syncing.
