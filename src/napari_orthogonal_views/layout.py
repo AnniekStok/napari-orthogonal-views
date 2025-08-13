@@ -1,3 +1,4 @@
+import contextlib
 import weakref
 
 from napari.viewer import Viewer
@@ -372,6 +373,45 @@ class OrthoViewManager:
         self.v_splitter.setSizes(
             [central_height - bottom_height, bottom_height]
         )
+
+    def cleanup(self):
+        """Restore original layout and free all widgets."""
+
+        # first hide to cleanup all connections
+        self.hide()
+
+        # remove the widgets and restore original canvas
+        if self._container is not None:
+            layout = self._central.layout()
+            if layout is not None:
+                layout.removeWidget(self._container)
+                self._container.deleteLater()
+                self._container = None
+
+            # Put the original canvas back
+            if self._original_canvas is not None:
+                layout.insertWidget(0, self._original_canvas)
+
+        # Disconnect all splitter signal handlers
+        for splitter, handler in self._splitter_handlers:
+            with contextlib.suppress(TypeError, RuntimeError):
+                splitter.splitterMoved.disconnect(handler)
+        self._splitter_handlers.clear()
+
+        # Delete the extra widgets if still there
+        for w in (
+            self.right_widget,
+            self.bottom_widget,
+            self.main_controls_widget,
+            getattr(self, "h_splitter_top", None),
+            getattr(self, "h_splitter_bottom", None),
+            getattr(self, "v_splitter", None),
+        ):
+            if w is not None:
+                w.deleteLater()
+
+        # Drop reference from the global dict to avoid leaks
+        _VIEWER_MANAGERS.pop(self.viewer, None)
 
 
 # Module-level helpers for napari.yaml entrypoints
