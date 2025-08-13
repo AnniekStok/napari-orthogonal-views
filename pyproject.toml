@@ -30,9 +30,7 @@ requires-python = ">=3.10"
 # See best practices: https://napari.org/stable/plugins/building_a_plugin/best_practices.html
 dependencies = [
     "numpy",
-    "magicgui",
     "qtpy",
-    "scikit-image",
 ]
 
 [project.optional-dependencies]
