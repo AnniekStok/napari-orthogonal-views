@@ -359,6 +359,9 @@ class OrthoViewManager:
             0.01, 0.01
         )  # minimal size for right and bottom
 
+        # remove axis labels
+        self.viewer.axes.visible = False
+
         self._shown = False
 
     def set_splitter_sizes(self, side_fraction: float, bottom_fraction: float):
