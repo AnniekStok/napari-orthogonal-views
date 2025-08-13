@@ -216,6 +216,7 @@ class OrthoViewWidget(QWidget):
         )
         # Create QtViewer instance with viewer model
         self.qt_viewer = QtViewer(self.vm_container.viewer_model)
+        self.qt_viewer.setAcceptDrops(False)  # no drag and drop here
 
         # Set layout
         layout = QHBoxLayout()
