@@ -55,7 +55,7 @@ or
 show_orthogonal_views(viewer)
 ```
 
-The checkboxes in the bottom right corner can be used to show cross hairs or for more control over camera zoom and axis center syncing.
+The size of the orthogonal view windows can be adjusted by clicking and dragging the small dot in between the views, optionally one or two views can be hidden entirely. The checkboxes in the bottom right corner can be used to show cross hairs or for more control over camera zoom and axis center syncing.
 
 By default, all events (including label editing such as painting) are synced across all views. The different views share the same underlying data array and undo/redo history. 
 
