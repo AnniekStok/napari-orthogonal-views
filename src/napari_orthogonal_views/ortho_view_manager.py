@@ -141,10 +141,7 @@ class CenterWidget(QCheckBox):
         for widget in self.widgets:
 
             # create handler to sync specific axis
-            def make_handler(w):
-                source_camera = w.viewer.camera
-                target_camera = w.vm_container.viewer_model.camera
-
+            def make_handler(w, source_camera, target_camera):
                 def handler(event=None):
                     if w._block_center:
                         return
@@ -163,7 +160,11 @@ class CenterWidget(QCheckBox):
             # Forward sync
             widget.sync_event(
                 widget.viewer.camera.events.center,
-                make_handler(widget),
+                make_handler(
+                    widget,
+                    widget.viewer.camera,
+                    widget.vm_container.viewer_model.camera,
+                ),
                 state,
                 key_label=f"center_viewer_to_vm_{id(widget)}",
             )
@@ -171,7 +172,11 @@ class CenterWidget(QCheckBox):
             # Reverse sync
             widget.sync_event(
                 widget.vm_container.viewer_model.camera.events.center,
-                make_handler(widget),
+                make_handler(
+                    widget,
+                    widget.vm_container.viewer_model.camera,
+                    widget.viewer.camera,
+                ),
                 state,
                 key_label=f"center_vm_to_viewer_{id(widget)}",
             )
