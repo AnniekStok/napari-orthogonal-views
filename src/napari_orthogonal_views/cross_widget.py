@@ -109,7 +109,7 @@ class CrossWidget(QCheckBox):
             self.viewer.layers.events, "removed", self._on_extent_change
         )
 
-        self._connect(self.viewer.dims.events, "range", self._on_extent_change)
+        self._connect(self.viewer.dims.events, "range", self._on_range_change)
 
     def _disconnect_signals(self) -> None:
         """Disconnect from viewer dims changes and inserting/deleting layers"""
@@ -128,7 +128,7 @@ class CrossWidget(QCheckBox):
             self.viewer.layers.events, "removed", self._on_extent_change
         )
         self._disconnect(
-            self.viewer.dims.events, "range", self._on_extent_change
+            self.viewer.dims.events, "range", self._on_range_change
         )
 
     def _connect(
@@ -155,6 +155,16 @@ class CrossWidget(QCheckBox):
         with contextlib.suppress(ValueError):
             sig.disconnect(handler)
             self._connections.remove((sig, handler))
+
+    def _on_range_change(self, event=None) -> None:
+        """Check if the new range step is different from the scaling on self.layer, if so
+        recompute the extent."""
+
+        viewer_scale = [r.step for r in self.viewer.dims.range]
+        if self.layer is not None and not np.all(
+            viewer_scale == self.layer.scale
+        ):
+            self._on_extent_change()
 
     def _on_extent_change(self, event=None) -> None:
         """Removes the cross layer and re-inserts it if necessary, to ensure it matches
