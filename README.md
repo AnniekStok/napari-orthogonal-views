@@ -15,6 +15,9 @@ A plugin for displaying the XZ and YZ views in separate windows, and syncing (pa
 
 This [napari] plugin was generated with [copier] using the [napari-plugin-template].
 
+
+![napari-orthogonal-views](https://github.com/user-attachments/assets/dc4333c6-c801-42d1-9ad5-8f753ef47942)
+
 <!--
 Don't miss the full getting started guide to set up your new package:
 https://github.com/napari/napari-plugin-template#getting-started
@@ -28,16 +31,38 @@ https://napari.org/stable/plugins/index.html
 You can install `napari-orthogonal-views` via [pip]:
 
 ```
-pip install napari-orthogonal-views
+pip install git+https://github.com/AnniekStok/napari-orthogonal-views.git
+```
+## Usage
+Commands are available in Views>Commands Palette (CMD+SHIFT+P):
+  - Show Orthogonal Views
+  - Hide Orthogonal Views
+  - Toggle Orthogonal Views
+  - Remove Orthogonal Views
+
+Once shown, it can also be popped up or collapsed using the checkbox in the bottom right corner 'Show orthogonal views'. 
+Alternatively, you can access the 'OrthoViewManager' via the console:
+
+```
+from napari_orthogonal_views.ortho_view_manager import show_orthogonal_views, hide_orthogonal_views, _get_manager
+m = _get_manager(viewer)
+m.show()
+m.is_shown()
+Out[6]: True
+```
+or 
+```
+show_orthogonal_views(viewer)
 ```
 
-If napari is not already installed, you can install `napari-orthogonal-views` with napari and Qt via:
+The checkboxes in the bottom right corner can be used to show cross hairs or for more control over camera zoom and axis center syncing.
 
-```
-pip install "napari-orthogonal-views[all]"
-```
+By default, all events (including label editing such as painting) are synced across all views. The different views share the same underlying data array and undo/redo history. 
 
-
+## Known issues and ongoing work
+- Deprecation warnings on 'Window._qt_window', 'LayerList._get_step_size', 'LayerList._get_extent_world'.
+- After removing the OrthoViewManager with `delete_and_cleanup` (Remove Orthogonal Views command), the canvas may become temporarily unresponsive. Clicking outside of Napari and then back on the Napari window usually fixes this.
+- Ongoing: more finegrained control over event syncing between the different viewers. 
 
 ## Contributing
 
