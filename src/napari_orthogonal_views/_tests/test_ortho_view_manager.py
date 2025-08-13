@@ -1,11 +1,11 @@
 from qtpy.QtWidgets import QWidget
 
-from napari_orthogonal_views._widget import OrthoViewWidget
-from napari_orthogonal_views.layout import (
+from napari_orthogonal_views.ortho_view_manager import (
     _get_manager,
     hide_orthogonal_views,
     show_orthogonal_views,
 )
+from napari_orthogonal_views.ortho_view_widget import OrthoViewWidget
 
 
 def test_orthoview_manager(make_napari_viewer, qtbot):

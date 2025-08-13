@@ -14,8 +14,8 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from napari_orthogonal_views._widget import OrthoViewWidget
 from napari_orthogonal_views.cross_widget import CrossWidget
+from napari_orthogonal_views.ortho_view_widget import OrthoViewWidget
 
 
 class MainControlsWidget(QWidget):
