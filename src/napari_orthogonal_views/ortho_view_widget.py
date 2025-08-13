@@ -272,27 +272,28 @@ class OrthoViewWidget(QWidget):
         """
 
         if not hasattr(self, "_sync_handlers"):
+            # maps key_label -> (emitter, handler)
             self._sync_handlers = {}
 
         if key_label is None:
             key_label = id(target_callable)
 
-        key = (id(source_emitter), key_label)
-
         if sync:
-            if key in self._sync_handlers:
+            if key_label in self._sync_handlers:
                 return  # do not allow duplicate connections
 
             def handler(event, _fn=target_callable):
                 _fn(event)
 
-            self._sync_handlers[key] = handler
+            # Store the actual emitter reference
+            self._sync_handlers[key_label] = (source_emitter, handler)
             self._connect(source_emitter, handler)
         else:
-            if key not in self._sync_handlers:
+            if key_label not in self._sync_handlers:
                 return
-            handler = self._sync_handlers.pop(key)
-            self._disconnect(source_emitter, handler)
+
+            emitter, handler = self._sync_handlers.pop(key_label)
+            self._disconnect(emitter, handler)
 
     def _connect(self, emitter, handler):
         """Connect an event emitter to a function handler and add it to the list of
