@@ -1,7 +1,7 @@
 [project]
 name = "napari-orthogonal-views"
 dynamic = ["version"]
-description = "A plugin for displaying the XZ and YZ views in separate windows, and syncing (paint) events between the different views. "
+description = "A napari plugin for dynamically displaying orthogonal views and syncing events between the different viewers. "
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
