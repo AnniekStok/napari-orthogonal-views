@@ -161,10 +161,22 @@ class CrossWidget(QCheckBox):
         recompute the extent."""
 
         viewer_scale = [r.step for r in self.viewer.dims.range]
-        if self.layer is not None and not np.all(
-            viewer_scale == self.layer.scale
-        ):
-            self._on_extent_change()
+
+        if self.layer is not None:
+            scales = [
+                layer.scale
+                for layer in self.viewer.layers
+                if layer is not self.layer
+            ]
+
+            if not any(
+                np.all(scale == viewer_scale) for scale in scales
+            ) or not np.all(viewer_scale == self.layer.scale):
+                # extent needs to be recomputed due to change in scaling on other layers.
+                # either self.layer still has an outdated scale different from all the
+                # normal layers, or the viewer scale is updated but the scale on
+                # self.layer is not.
+                self._on_extent_change()
 
     def _on_extent_change(self, event=None) -> None:
         """Removes the cross layer and re-inserts it if necessary, to ensure it matches
@@ -193,10 +205,13 @@ class CrossWidget(QCheckBox):
             self._update_extent()
             self._connect_signals()
 
+        self.viewer.reset_view()
+
     # @qthrottled(leading=False)
     def _update_extent(self) -> None:
         """Compute the range the cross layer should cover, then update it."""
 
+        # determine extent based on all layers except self.layer
         extent_list = [
             layer.extent
             for layer in self.viewer.layers
