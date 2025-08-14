@@ -9,11 +9,14 @@
 [![npe2](https://img.shields.io/badge/plugin-npe2-blue?link=https://napari.org/stable/plugins/index.html)](https://napari.org/stable/plugins/index.html)
 [![Copier](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/copier-org/copier/master/img/badge/badge-grayscale-inverted-border-purple.json)](https://github.com/copier-org/copier)
 
-A plugin for displaying the XZ and YZ views in separate windows, and syncing (paint) events between the different views. 
+A napari plugin for dynamically displaying orthogonal views and syncing events between the different viewers. Based on https://napari.org/dev/gallery/multiple_viewer_widget.html.
 
 ----------------------------------
 
 This [napari] plugin was generated with [copier] using the [napari-plugin-template].
+
+
+![napari-orthogonal-views](https://github.com/user-attachments/assets/dc4333c6-c801-42d1-9ad5-8f753ef47942)
 
 <!--
 Don't miss the full getting started guide to set up your new package:
@@ -28,16 +31,40 @@ https://napari.org/stable/plugins/index.html
 You can install `napari-orthogonal-views` via [pip]:
 
 ```
-pip install napari-orthogonal-views
+pip install git+https://github.com/AnniekStok/napari-orthogonal-views.git
+```
+## Usage
+Commands are available in Views>Commands Palette (CMD+SHIFT+P):
+  - Show Orthogonal Views
+  - Hide Orthogonal Views
+  - Toggle Orthogonal Views
+  - Remove Orthogonal Views
+
+Once shown, it can also be popped up or collapsed using the checkbox in the bottom right corner 'Show orthogonal views'. 
+Alternatively, you can show the orthogonal views via the console:
+
+```
+from napari_orthogonal_views.ortho_view_manager import show_orthogonal_views
+show_orthogonal_views(viewer)
 ```
 
-If napari is not already installed, you can install `napari-orthogonal-views` with napari and Qt via:
+And access the OrthoViewManager via _get_manager:
 
 ```
-pip install "napari-orthogonal-views[all]"
+from napari_orthogonal_views.ortho_view_manager import _get_manager
+m = _get_manager(viewer)
+m.is_shown()
+Out[6]: True
 ```
 
+The size of the orthogonal view windows can be adjusted by clicking and dragging the small dot in between the views, optionally one or two views can be hidden entirely. The checkboxes in the bottom right corner can be used to show cross hairs or for more control over camera zoom and axis center syncing.
 
+By default, all events (including label editing such as painting) are synced across all views. The different views share the same underlying data array and undo/redo history. 
+
+## Known issues and ongoing work
+- Deprecation warnings on 'Window._qt_window', 'LayerList._get_step_size', 'LayerList._get_extent_world'.
+- After removing the OrthoViewManager with `delete_and_cleanup` (Remove Orthogonal Views command), the canvas may become temporarily unresponsive. Clicking outside of Napari and then back on the Napari window usually fixes this.
+- Ongoing: more finegrained control over event syncing between the different viewers. 
 
 ## Contributing
 
