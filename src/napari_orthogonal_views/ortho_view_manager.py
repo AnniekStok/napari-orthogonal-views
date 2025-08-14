@@ -1,5 +1,6 @@
 import contextlib
 import weakref
+from collections.abc import Callable
 
 from napari.viewer import Viewer
 from psygnal import Signal
@@ -200,6 +201,8 @@ class OrthoViewManager:
         self._splitter_handlers: list[tuple[QSplitter, object]] = []
         self._shown = False
 
+        self._layer_hooks: dict[type, list[Callable]] = {}
+
         # get layout of central widget
         central = self.main_window.centralWidget()
         layout: QLayout = central.layout()
@@ -266,6 +269,16 @@ class OrthoViewManager:
 
         self._container = container
 
+    def register_layer_hook(self, layer_type: type, hook: Callable):
+        """Register a hook to be applied to any matching layer type."""
+
+        self._layer_hooks.setdefault(layer_type, []).append(hook)
+
+    def _apply_hooks_to_container(self, widget: OrthoViewWidget):
+        """Give the container all currently registered hooks."""
+
+        widget.vm_container.set_layer_hooks(self._layer_hooks)
+
     def is_shown(self) -> bool:
         """Return True if orthoviews are shown."""
 
@@ -294,6 +307,8 @@ class OrthoViewManager:
         new_right = OrthoViewWidget(
             self.viewer, order=(-1, -2, -3), sync_axes=[1]
         )
+        self._apply_hooks_to_container(new_right)
+
         old_right = self.right_widget
         idx = self.h_splitter_top.indexOf(old_right)
         self.h_splitter_top.replaceWidget(idx, new_right)
@@ -304,6 +319,7 @@ class OrthoViewManager:
         new_bottom = OrthoViewWidget(
             self.viewer, order=(-2, -3, -1), sync_axes=[2]
         )
+        self._apply_hooks_to_container(new_bottom)
         old_bottom = self.bottom_widget
         idx = self.h_splitter_bottom.indexOf(old_bottom)
         self.h_splitter_bottom.replaceWidget(idx, new_bottom)

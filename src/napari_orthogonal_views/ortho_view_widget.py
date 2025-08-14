@@ -67,9 +67,16 @@ class ViewerModelContainer:
         self.viewer_model = ViewerModel(title)
         self.viewer_model.axes.visible = True
         self._block = False
+        self._layer_hooks: dict[type, list[Callable]] = {}
+
+    def set_layer_hooks(self, hooks: dict[type, list[Callable]]):
+        """Replace current hook mapping."""
+
+        self._layer_hooks = hooks
 
     def add_layer(self, orig_layer: Layer, index: int):
         """Set the layers of the contained ViewerModel."""
+
         self.viewer_model.layers.insert(
             index, copy_layer(orig_layer, self.title)
         )
@@ -145,6 +152,12 @@ class ViewerModelContainer:
                 )  # copy data from orig_layer to copied_layer (copied_layer emits signal
                 # but we don't process it)
             )
+
+        # Special hooks based on layer type
+        for hook_type, hooks in self._layer_hooks.items():
+            if isinstance(orig_layer, hook_type):
+                for hook in hooks:
+                    hook(orig_layer, copied_layer)
 
     def update_data(
         self, source: Labels, target: Labels, event: Event
