@@ -200,6 +200,7 @@ class OrthoViewManager:
         self._container: QWidget | None = None
         self._splitter_handlers: list[tuple[QSplitter, object]] = []
         self._shown = False
+        self.sync_filters = None
 
         self._layer_hooks: dict[type, list[Callable]] = {}
 
@@ -274,10 +275,11 @@ class OrthoViewManager:
 
         self._layer_hooks.setdefault(layer_type, []).append(hook)
 
-    def _apply_hooks_to_container(self, widget: OrthoViewWidget):
-        """Give the container all currently registered hooks."""
+    def set_sync_filters(self, sync_filters: dict):
+        """Provide a dictionary with layer types as keys and dictionaries as values:
+        {"forward_exclude": set|str, "reverse_exclude": set|str}"""
 
-        widget.vm_container.set_layer_hooks(self._layer_hooks)
+        self.sync_filters = sync_filters
 
     def is_shown(self) -> bool:
         """Return True if orthoviews are shown."""
@@ -305,9 +307,12 @@ class OrthoViewManager:
 
         # Replace right widget with OrthoViewWidget
         new_right = OrthoViewWidget(
-            self.viewer, order=(-1, -2, -3), sync_axes=[1]
+            self.viewer,
+            order=(-1, -2, -3),
+            sync_axes=[1],
+            sync_filters=self.sync_filters,
+            layer_hooks=self._layer_hooks,
         )
-        self._apply_hooks_to_container(new_right)
 
         old_right = self.right_widget
         idx = self.h_splitter_top.indexOf(old_right)
@@ -317,9 +322,12 @@ class OrthoViewManager:
 
         # Replace bottom widget with OrthoViewWidget
         new_bottom = OrthoViewWidget(
-            self.viewer, order=(-2, -3, -1), sync_axes=[2]
+            self.viewer,
+            order=(-2, -3, -1),
+            sync_axes=[2],
+            sync_filters=self.sync_filters,
+            layer_hooks=self._layer_hooks,
         )
-        self._apply_hooks_to_container(new_bottom)
         old_bottom = self.bottom_widget
         idx = self.h_splitter_bottom.indexOf(old_bottom)
         self.h_splitter_bottom.replaceWidget(idx, new_bottom)

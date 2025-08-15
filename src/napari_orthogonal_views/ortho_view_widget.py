@@ -61,18 +61,56 @@ class ViewerModelContainer:
     A container that holds a ViewerModel and manages synchronization.
     """
 
-    def __init__(self, title: str, rel_order: tuple[int]):
+    def __init__(self, title: str, rel_order: tuple[int], sync_filters=None):
         self.title = title
         self.rel_order = rel_order
         self.viewer_model = ViewerModel(title)
         self.viewer_model.axes.visible = True
         self._block = False
         self._layer_hooks: dict[type, list[Callable]] = {}
+        self.sync_filters = sync_filters or {}
 
     def set_layer_hooks(self, hooks: dict[type, list[Callable]]):
         """Replace current hook mapping."""
 
         self._layer_hooks = hooks
+
+    def _sync_layer_properties(self, orig_layer, copied_layer):
+        """Sync properties between orig_layer and copied_layer, applying optional sync_filters."""
+
+        def is_excluded(layer, prop, direction):
+            """Check whether to skip syncing a property in a given direction."""
+            for cls, rules in self.sync_filters.items():
+                if isinstance(layer, cls):
+                    excluded = rules.get(f"{direction}_exclude", set())
+                    if excluded == "*":  # block all
+                        return True
+                    if prop in excluded:
+                        return True
+            return False
+
+        for property_name in get_property_names(orig_layer):
+            # Forward sync: orig_layer → copied_layer
+            if not is_excluded(orig_layer, property_name, "forward"):
+                getattr(orig_layer.events, property_name).connect(
+                    own_partial(
+                        self.sync_property,
+                        property_name,
+                        orig_layer,
+                        copied_layer,
+                    )
+                )
+
+            # Reverse sync: copied_layer → orig_layer
+            if not is_excluded(orig_layer, property_name, "reverse"):
+                getattr(copied_layer.events, property_name).connect(
+                    own_partial(
+                        self.sync_property,
+                        property_name,
+                        copied_layer,
+                        orig_layer,
+                    )
+                )
 
     def add_layer(self, orig_layer: Layer, index: int):
         """Set the layers of the contained ViewerModel."""
@@ -89,25 +127,7 @@ class ViewerModelContainer:
         orig_layer.events.name.connect(sync_name_wrapper)
 
         # sync properties
-        for property_name in get_property_names(orig_layer):
-            # sync in both directions (from original layer to copied layer and back)
-            getattr(orig_layer.events, property_name).connect(
-                own_partial(
-                    self.sync_property,
-                    property_name,
-                    orig_layer,
-                    copied_layer,
-                )
-            )
-
-            getattr(copied_layer.events, property_name).connect(
-                own_partial(
-                    self.sync_property,
-                    property_name,
-                    copied_layer,
-                    orig_layer,
-                )
-            )
+        self._sync_layer_properties(orig_layer, copied_layer)
 
         if isinstance(orig_layer, Labels):
 
@@ -212,6 +232,8 @@ class OrthoViewWidget(QWidget):
         viewer: napari.Viewer,
         order=(-2, -3, -1),
         sync_axes: list[int] | None = None,
+        sync_filters: dict | None = None,
+        layer_hooks: dict | None = None,
     ):
         super().__init__()
         self.viewer = viewer
@@ -222,11 +244,13 @@ class OrthoViewWidget(QWidget):
         self.sync_axes = sync_axes
         self._block_center = False
         self._block_step = False
+        self._layer_hooks = layer_hooks
 
         # create container to store viewer model in
         self.vm_container = ViewerModelContainer(
-            title="orthogonal view", rel_order=order
+            title="orthogonal view", rel_order=order, sync_filters=sync_filters
         )
+        self.vm_container.set_layer_hooks(self._layer_hooks)
         # Create QtViewer instance with viewer model
         self.qt_viewer = QtViewer(self.vm_container.viewer_model)
         self.qt_viewer.setAcceptDrops(False)  # no drag and drop here
@@ -240,6 +264,14 @@ class OrthoViewWidget(QWidget):
         # Add the layers currently in the viewer
         for i, layer in enumerate(self.viewer.layers):
             self.vm_container.add_layer(layer, i)
+
+        # Ensure the layer with the same index is active
+        active_layer = self.viewer.layers.selection.active
+        if active_layer is not None:
+            layer_index = self.viewer.layers.index(active_layer)
+            self.vm_container.viewer_model.layers.selection.active = (
+                self.vm_container.viewer_model.layers[layer_index]
+            )
 
         # Connect to events
         self._connections = []
