@@ -22,6 +22,7 @@ def copy_layer(layer: Layer, name: str = ""):
     if isinstance(layer, Labels):
         res_layer._undo_history = layer._undo_history
         res_layer._redo_history = layer._redo_history
+        res_layer.contour = layer.contour
     return res_layer
 
 
