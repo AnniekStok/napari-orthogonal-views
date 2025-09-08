@@ -39,14 +39,14 @@ def center_cross_on_mouse(
     )
 
 
-action_manager.register_action(
-    name="napari:move_point",
-    command=center_cross_on_mouse,
-    description="Move dims point to mouse position",
-    keymapprovider=ViewerModel,
-)
-
-action_manager.bind_shortcut("napari:move_point", "T")
+def init_actions():
+    action_manager.register_action(
+        name="napari:move_point",
+        command=center_cross_on_mouse,
+        description="Move dims point to mouse position",
+        keymapprovider=ViewerModel,
+    )
+    action_manager.bind_shortcut("napari:move_point", "T")
 
 
 class CrossWidget(QCheckBox):
@@ -76,6 +76,9 @@ class CrossWidget(QCheckBox):
 
         # checkbox state
         self._connect(self, "stateChanged", self._update_cross_visibility)
+
+        # Add action to action manager
+        init_actions()
 
     def _update_checkbox_enabled(self) -> None:
         """Update whether the checkbox is enabled depending on the number of dims and
