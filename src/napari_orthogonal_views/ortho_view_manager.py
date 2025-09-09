@@ -2,6 +2,7 @@ import contextlib
 import weakref
 from collections.abc import Callable
 
+from napari._vispy.utils.visual import overlay_to_visual
 from napari.viewer import Viewer
 from psygnal import Signal
 from qtpy.QtCore import Qt, QTimer
@@ -16,7 +17,10 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from napari_orthogonal_views.cross_widget import CrossWidget
+from napari_orthogonal_views.cross_hair_overlay import (
+    CursorOverlay,
+    VispyCursorOverlay,
+)
 from napari_orthogonal_views.ortho_view_widget import OrthoViewWidget
 
 
@@ -75,7 +79,9 @@ class ControlsWidget(QWidget):
     def __init__(self, viewer: Viewer, widgets: list[OrthoViewWidget]):
         super().__init__()
 
-        self.cross_widget = CrossWidget(viewer)
+        self.cross_widget = QCheckBox(
+            "Show cross hairs"
+        )  # CrossWidget(viewer)
         self.zoom_widget = ZoomWidget(widgets=widgets)
         self.center_widget = CenterWidget(widgets=widgets)
 
@@ -209,6 +215,10 @@ class OrthoViewManager:
         self._shown = False
         self.sync_filters = None
 
+        overlay_to_visual[CursorOverlay] = VispyCursorOverlay
+        cursor_overlay = CursorOverlay()
+        self.viewer._overlays["crosshairs"] = cursor_overlay
+
         self._layer_hooks: dict[type, list[Callable]] = {}
 
         # get layout of central widget
@@ -277,6 +287,21 @@ class OrthoViewManager:
 
         self._container = container
 
+    def show_cross_hairs(self, state: bool):
+        """Show or hide the cross hairs overlay"""
+
+        state = state == 2
+
+        self.viewer._overlays["crosshairs"].visible = state
+        if isinstance(self.right_widget, OrthoViewWidget):
+            self.right_widget.vm_container.viewer_model._overlays[
+                "crosshairs"
+            ].visible = state
+        if isinstance(self.bottom_widget, OrthoViewWidget):
+            self.bottom_widget.vm_container.viewer_model._overlays[
+                "crosshairs"
+            ].visible = state
+
     def register_layer_hook(self, layer_type: type, hook: Callable):
         """Register a hook to be applied to any matching layer type."""
 
@@ -344,6 +369,9 @@ class OrthoViewManager:
         # Add controls to main_controls widget
         self.main_controls_widget.add_controls(
             viewer=self.viewer, widgets=[self.right_widget, self.bottom_widget]
+        )
+        self.main_controls_widget.controls_widget.cross_widget.stateChanged.connect(
+            self.show_cross_hairs
         )
 
         # assign 30% of window width and height to orth views

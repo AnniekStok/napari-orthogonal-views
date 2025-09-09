@@ -3,6 +3,7 @@ from collections.abc import Callable
 from types import MethodType
 
 import napari
+from napari._vispy.utils.visual import overlay_to_visual
 from napari.components.viewer_model import ViewerModel
 from napari.layers import Labels, Layer
 from napari.qt import QtViewer
@@ -11,6 +12,11 @@ from napari.utils.events.event import WarningEmitter
 from qtpy.QtWidgets import (
     QHBoxLayout,
     QWidget,
+)
+
+from napari_orthogonal_views.cross_hair_overlay import (
+    CursorOverlay,
+    VispyCursorOverlay,
 )
 
 
@@ -70,6 +76,10 @@ class ViewerModelContainer:
         self._block = False
         self._layer_hooks: dict[type, list[Callable]] = {}
         self.sync_filters = sync_filters or {}
+
+        overlay_to_visual[CursorOverlay] = VispyCursorOverlay
+        cursor_overlay = CursorOverlay()
+        self.viewer_model._overlays["crosshairs"] = cursor_overlay
 
     def set_layer_hooks(self, hooks: dict[type, list[Callable]]):
         """Replace current hook mapping."""
