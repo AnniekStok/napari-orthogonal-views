@@ -8,6 +8,7 @@ from qtpy.QtCore import Qt, QTimer
 from qtpy.QtWidgets import (
     QCheckBox,
     QGroupBox,
+    QLabel,
     QLayout,
     QSizePolicy,
     QSplitter,
@@ -82,6 +83,12 @@ class ControlsWidget(QWidget):
         layout.addWidget(self.cross_widget)
         layout.addWidget(self.zoom_widget)
         layout.addWidget(self.center_widget)
+        label = QLabel("Press T to center view on mouse")
+        label.setWordWrap(True)
+        font = label.font()
+        font.setItalic(True)
+        label.setFont(font)
+        layout.addWidget(label)
         self.setLayout(layout)
 
     def cleanup(self):
