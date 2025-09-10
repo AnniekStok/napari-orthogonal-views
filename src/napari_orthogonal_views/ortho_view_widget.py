@@ -1,4 +1,5 @@
 import contextlib
+import warnings
 from collections.abc import Callable
 from types import MethodType
 
@@ -16,7 +17,7 @@ from qtpy.QtWidgets import (
 
 from napari_orthogonal_views.cross_hair_overlay import (
     CursorOverlay,
-    VispyCursorOverlay,
+    VispyCrosshairOverlay,
 )
 
 
@@ -77,9 +78,11 @@ class ViewerModelContainer:
         self._layer_hooks: dict[type, list[Callable]] = {}
         self.sync_filters = sync_filters or {}
 
-        overlay_to_visual[CursorOverlay] = VispyCursorOverlay
+        overlay_to_visual[CursorOverlay] = VispyCrosshairOverlay
         cursor_overlay = CursorOverlay(blending="translucent_no_depth")
-        self.viewer_model._overlays["crosshairs"] = cursor_overlay
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.viewer_model._overlays["crosshairs"] = cursor_overlay
 
     def set_layer_hooks(self, hooks: dict[type, list[Callable]]):
         """Replace current hook mapping."""

@@ -66,7 +66,7 @@ class Cursor(Line):
         self.set_data(pos=self._base_segments + value)
 
 
-class VispyCursorOverlay(ViewerOverlayMixin, VispySceneOverlay):
+class VispyCrosshairOverlay(ViewerOverlayMixin, VispySceneOverlay):
     """Overlay indicating the position of the crosshair in the world."""
 
     def __init__(self, *, viewer, overlay, parent=None) -> None:

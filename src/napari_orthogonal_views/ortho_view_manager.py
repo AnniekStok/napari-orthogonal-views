@@ -1,4 +1,5 @@
 import contextlib
+import warnings
 import weakref
 from collections.abc import Callable
 
@@ -19,7 +20,7 @@ from qtpy.QtWidgets import (
 
 from napari_orthogonal_views.cross_hair_overlay import (
     CursorOverlay,
-    VispyCursorOverlay,
+    VispyCrosshairOverlay,
 )
 from napari_orthogonal_views.ortho_view_widget import OrthoViewWidget
 
@@ -65,7 +66,7 @@ class MainControlsWidget(QWidget):
         """Remove ControlsWidget from the layout"""
 
         if isinstance(self.controls_widget, ControlsWidget):
-            self.controls_widget.cleanup()
+            self.controls_widget.cross_widget.setChecked(False)
         old_widget = self.controls_widget
         self.controls_widget = QWidget()
         self.main_layout.replaceWidget(old_widget, self.controls_widget)
@@ -79,9 +80,7 @@ class ControlsWidget(QWidget):
     def __init__(self, viewer: Viewer, widgets: list[OrthoViewWidget]):
         super().__init__()
 
-        self.cross_widget = QCheckBox(
-            "Show cross hairs"
-        )  # CrossWidget(viewer)
+        self.cross_widget = QCheckBox("Show cross hairs")
         self.zoom_widget = ZoomWidget(widgets=widgets)
         self.center_widget = CenterWidget(widgets=widgets)
 
@@ -96,12 +95,6 @@ class ControlsWidget(QWidget):
         label.setFont(font)
         layout.addWidget(label)
         self.setLayout(layout)
-
-    def cleanup(self):
-        """Call cleanup on the cross widget to ensure all signals are disconnected and the
-        layer is removed"""
-
-        self.cross_widget.cleanup()
 
 
 class ZoomWidget(QCheckBox):
@@ -208,16 +201,20 @@ class OrthoViewManager:
 
     def __init__(self, viewer: Viewer):
         self.viewer = viewer
-        self.main_window = viewer.window._qt_window
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.main_window = viewer.window._qt_window
         self._central = self.main_window.centralWidget()
         self._container: QWidget | None = None
         self._splitter_handlers: list[tuple[QSplitter, object]] = []
         self._shown = False
         self.sync_filters = None
 
-        overlay_to_visual[CursorOverlay] = VispyCursorOverlay
+        overlay_to_visual[CursorOverlay] = VispyCrosshairOverlay
         cursor_overlay = CursorOverlay(blending="translucent_no_depth")
-        self.viewer._overlays["crosshairs"] = cursor_overlay
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.viewer._overlays["crosshairs"] = cursor_overlay
 
         self._layer_hooks: dict[type, list[Callable]] = {}
 
@@ -292,15 +289,17 @@ class OrthoViewManager:
 
         state = state == 2
 
-        self.viewer._overlays["crosshairs"].visible = state
-        if isinstance(self.right_widget, OrthoViewWidget):
-            self.right_widget.vm_container.viewer_model._overlays[
-                "crosshairs"
-            ].visible = state
-        if isinstance(self.bottom_widget, OrthoViewWidget):
-            self.bottom_widget.vm_container.viewer_model._overlays[
-                "crosshairs"
-            ].visible = state
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.viewer._overlays["crosshairs"].visible = state
+            if isinstance(self.right_widget, OrthoViewWidget):
+                self.right_widget.vm_container.viewer_model._overlays[
+                    "crosshairs"
+                ].visible = state
+            if isinstance(self.bottom_widget, OrthoViewWidget):
+                self.bottom_widget.vm_container.viewer_model._overlays[
+                    "crosshairs"
+                ].visible = state
 
     def register_layer_hook(self, layer_type: type, hook: Callable):
         """Register a hook to be applied to any matching layer type."""
