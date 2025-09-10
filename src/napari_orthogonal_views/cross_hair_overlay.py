@@ -75,6 +75,7 @@ class VispyCursorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         )
         self.viewer = viewer
         self.viewer.dims.events.current_step.connect(self._move_crosshairs)
+        super().reset()  # reset to make sure the overlay is not visible too early
 
     def _move_crosshairs(self) -> None:
         """Move the crosshairs to the current viewer step"""
