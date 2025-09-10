@@ -8,7 +8,7 @@ from napari._vispy.utils.visual import overlay_to_visual
 from napari.components.viewer_model import ViewerModel
 from napari.layers import Labels, Layer
 from napari.qt import QtViewer
-from napari.utils.events import Event
+from napari.utils.events import Event, EventEmitter
 from napari.utils.events.event import WarningEmitter
 from qtpy.QtWidgets import (
     QHBoxLayout,
@@ -16,7 +16,7 @@ from qtpy.QtWidgets import (
 )
 
 from napari_orthogonal_views.cross_hair_overlay import (
-    CursorOverlay,
+    CrosshairOverlay,
     VispyCrosshairOverlay,
 )
 
@@ -78,19 +78,23 @@ class ViewerModelContainer:
         self._layer_hooks: dict[type, list[Callable]] = {}
         self.sync_filters = sync_filters or {}
 
-        overlay_to_visual[CursorOverlay] = VispyCrosshairOverlay
-        cursor_overlay = CursorOverlay(blending="translucent_no_depth")
+        # Add crosshair overlays (initially invisible)
+        overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
+        cursor_overlay = CrosshairOverlay(blending="translucent_no_depth")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.viewer_model._overlays["crosshairs"] = cursor_overlay
 
-    def set_layer_hooks(self, hooks: dict[type, list[Callable]]):
+    def set_layer_hooks(self, hooks: dict[type, list[Callable]]) -> None:
         """Replace current hook mapping."""
 
         self._layer_hooks = hooks
 
-    def _sync_layer_properties(self, orig_layer, copied_layer):
-        """Sync properties between orig_layer and copied_layer, applying optional sync_filters."""
+    def _sync_layer_properties(
+        self, orig_layer: Layer, copied_layer: Layer
+    ) -> None:
+        """Sync properties between orig_layer and copied_layer, applying optional
+        sync_filters."""
 
         def is_excluded(layer, prop, direction):
             """Check whether to skip syncing a property in a given direction."""
@@ -126,7 +130,7 @@ class ViewerModelContainer:
                     )
                 )
 
-    def add_layer(self, orig_layer: Layer, index: int):
+    def add_layer(self, orig_layer: Layer, index: int) -> None:
         """Set the layers of the contained ViewerModel."""
 
         self.viewer_model.layers.insert(
@@ -211,7 +215,9 @@ class ViewerModelContainer:
         # target layer is orig_layer)
         self._block = False
 
-    def sync_name(self, orig_layer: Layer, copied_layer: Layer, event: Event):
+    def sync_name(
+        self, orig_layer: Layer, copied_layer: Layer, event: Event
+    ) -> None:
         """Forward the renaming event from original layer to copied layer"""
 
         copied_layer.name = orig_layer.name
@@ -222,7 +228,7 @@ class ViewerModelContainer:
         source_layer: Layer,
         target_layer: Layer,
         event: Event,
-    ):
+    ) -> None:
         """Sync a property of a layer in this viewer model."""
 
         if self._block:
@@ -312,11 +318,11 @@ class OrthoViewWidget(QWidget):
 
     def sync_event(
         self,
-        source_emitter,
-        target_callable,
+        source_emitter: EventEmitter,
+        target_callable: Callable,
         sync: bool,
         key_label: str | None = None,
-    ):
+    ) -> None:
         """
         Connect or disconnect an event from a source emitter to a target callable.
 
@@ -355,14 +361,14 @@ class OrthoViewWidget(QWidget):
             emitter, handler = self._sync_handlers.pop(key_label)
             self._disconnect(emitter, handler)
 
-    def _connect(self, emitter, handler):
+    def _connect(self, emitter: EventEmitter, handler: Callable) -> None:
         """Connect an event emitter to a function handler and add it to the list of
         connections."""
 
         emitter.connect(handler)
         self._connections.append((emitter, handler))
 
-    def _disconnect(self, emitter, handler):
+    def _disconnect(self, emitter: EventEmitter, handler: Callable) -> None:
         """Disconnect an event emitter to a function handler and remove it from the list
         of connections."""
 
@@ -370,7 +376,7 @@ class OrthoViewWidget(QWidget):
             emitter.disconnect(handler)
             self._connections.remove((emitter, handler))
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """Disconnect from all signals and clear the list"""
 
         for sig, handler in self._connections:
@@ -379,7 +385,7 @@ class OrthoViewWidget(QWidget):
 
         self._connections.clear()
 
-    def set_orth_views_dims_order(self):
+    def set_orth_views_dims_order(self) -> None:
         """The the order of the z,y,x dims in the orthogonal views, by using the
         rel_order attribute of the viewer models"""
 
@@ -412,12 +418,12 @@ class OrthoViewWidget(QWidget):
         # whether or not the axis should be visible
         self.vm_container.viewer_model.axes.visible = self.viewer.axes.visible
 
-    def _reset_view(self):
+    def _reset_view(self) -> None:
         """Propagate the reset view event"""
 
         self.vm_container.viewer_model.reset_view()
 
-    def _layer_selection_changed(self, event):
+    def _layer_selection_changed(self, event: Event) -> None:
         """Update of current active layers"""
 
         if event.value is None:
@@ -429,7 +435,7 @@ class OrthoViewWidget(QWidget):
                 self.vm_container.viewer_model.layers[event.value.name]
             )
 
-    def _layer_added(self, event):
+    def _layer_added(self, event: Event) -> None:
         """Add layer to additional other viewer models"""
 
         if event.value.name not in self.vm_container.viewer_model.layers:
@@ -437,7 +443,7 @@ class OrthoViewWidget(QWidget):
 
         self.set_orth_views_dims_order()
 
-    def _layer_removed(self, event):
+    def _layer_removed(self, event: Event) -> None:
         """Remove layer in all viewer models"""
 
         layer_name = event.value.name
@@ -445,7 +451,7 @@ class OrthoViewWidget(QWidget):
             self.vm_container.viewer_model.layers.pop(layer_name)
         self.set_orth_views_dims_order()
 
-    def _layer_moved(self, event):
+    def _layer_moved(self, event: Event) -> None:
         """Update order of layers in all viewer models"""
 
         dest_index = (
@@ -455,7 +461,7 @@ class OrthoViewWidget(QWidget):
         )
         self.vm_container.viewer_model.layers.move(event.index, dest_index)
 
-    def _update_current_step(self, event):
+    def _update_current_step(self, event: Event) -> None:
         """Sync the current step between different viewer models"""
 
         if self._block_center:

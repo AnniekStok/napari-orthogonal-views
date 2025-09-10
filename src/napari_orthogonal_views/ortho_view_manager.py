@@ -19,7 +19,7 @@ from qtpy.QtWidgets import (
 )
 
 from napari_orthogonal_views.cross_hair_overlay import (
-    CursorOverlay,
+    CrosshairOverlay,
     VispyCrosshairOverlay,
 )
 from napari_orthogonal_views.ortho_view_widget import OrthoViewWidget
@@ -107,6 +107,7 @@ class ZoomWidget(QCheckBox):
 
     def set_zoom_sync(self, state: bool):
         """Connect or disconnect camera zoom syncing on each of the ortho view widgets."""
+
         for widget in self.widgets:
 
             # main viewer to ortho view
@@ -210,12 +211,14 @@ class OrthoViewManager:
         self._shown = False
         self.sync_filters = None
 
-        overlay_to_visual[CursorOverlay] = VispyCrosshairOverlay
-        cursor_overlay = CursorOverlay(blending="translucent_no_depth")
+        # Add crosshairs overlay to main viewer
+        overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
+        cursor_overlay = CrosshairOverlay(blending="translucent_no_depth")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.viewer._overlays["crosshairs"] = cursor_overlay
 
+        # initialize layer hooks
         self._layer_hooks: dict[type, list[Callable]] = {}
 
         # get layout of central widget
@@ -234,7 +237,7 @@ class OrthoViewManager:
             )
         layout.removeWidget(self._original_canvas)
 
-        # widgets
+        # widgets holding orthoviews and controls
         self.right_widget = QWidget()  # empty widget placeholder
         self.bottom_widget = QWidget()  # empty widget placeholder
 
@@ -284,8 +287,8 @@ class OrthoViewManager:
 
         self._container = container
 
-    def show_cross_hairs(self, state: bool):
-        """Show or hide the cross hairs overlay"""
+    def show_cross_hairs(self, state: bool) -> None:
+        """Show or hide the crosshairs overlay on all viewers"""
 
         state = state == 2
 

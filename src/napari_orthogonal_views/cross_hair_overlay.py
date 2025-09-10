@@ -43,7 +43,7 @@ def init_actions():
     action_manager.bind_shortcut("napari:move_point", "T")
 
 
-class Cursor(Line):
+class Crosshairs(Line):
     _base_segments = (
         np.array(
             [
@@ -71,7 +71,7 @@ class VispyCrosshairOverlay(ViewerOverlayMixin, VispySceneOverlay):
 
     def __init__(self, *, viewer, overlay, parent=None) -> None:
         super().__init__(
-            node=Cursor(), viewer=viewer, overlay=overlay, parent=parent
+            node=Crosshairs(), viewer=viewer, overlay=overlay, parent=parent
         )
         self.viewer = viewer
         self.viewer.dims.events.current_step.connect(self._move_crosshairs)
@@ -93,7 +93,7 @@ class VispyCrosshairOverlay(ViewerOverlayMixin, VispySceneOverlay):
         self.node.set_position(np.array(position)[displayed])
 
 
-class CursorOverlay(SceneOverlay):
+class CrosshairOverlay(SceneOverlay):
     """
     Overlay that displays where the cursor is located in the world.
     """
