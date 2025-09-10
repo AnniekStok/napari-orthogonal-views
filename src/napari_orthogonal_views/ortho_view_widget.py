@@ -78,7 +78,7 @@ class ViewerModelContainer:
         self.sync_filters = sync_filters or {}
 
         overlay_to_visual[CursorOverlay] = VispyCursorOverlay
-        cursor_overlay = CursorOverlay()
+        cursor_overlay = CursorOverlay(blending="translucent_no_depth")
         self.viewer_model._overlays["crosshairs"] = cursor_overlay
 
     def set_layer_hooks(self, hooks: dict[type, list[Callable]]):

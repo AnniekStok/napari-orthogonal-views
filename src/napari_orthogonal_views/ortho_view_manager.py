@@ -216,7 +216,7 @@ class OrthoViewManager:
         self.sync_filters = None
 
         overlay_to_visual[CursorOverlay] = VispyCursorOverlay
-        cursor_overlay = CursorOverlay()
+        cursor_overlay = CursorOverlay(blending="translucent_no_depth")
         self.viewer._overlays["crosshairs"] = cursor_overlay
 
         self._layer_hooks: dict[type, list[Callable]] = {}
