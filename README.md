@@ -61,11 +61,31 @@ Crosshair overlays are based on [this](https://github.com/napari/napari/pull/801
 
 By default, all events (including label editing such as painting) are synced across all views. The different views share the same underlying data array and undo/redo history. 
 
+## Syncing properties
+By default, all layer properties should be synced between the layer on the main viewer and the orthoviews. However, it is possible to have more finegrained control over the synced properties via the `set_sync_filters` function, as long as it is specified *before* the orthogonal views are activated. 
+
+```
+from napari_orthogonal_views.ortho_view_manager import _get_manager
+from napari.layers import Tracks, Labels
+m = _get_manager(viewer)
+sync_filters = {
+    Tracks: {
+        "forward_exclude": "*",  # disable all forward sync
+        "reverse_exclude": "*",  # disable all reverse sync
+    },
+    Labels: {
+        "forward_exclude": "contour" # exclude contour from forward syncing
+    },
+}
+m.set_sync_filters(sync_filters)
+
+## add labels layers and activate orthogonal views
+
+```
 
 ## Known issues and ongoing work
 - Deprecation warnings on 'Window._qt_window', 'LayerList._get_step_size', 'LayerList._get_extent_world'.
 - After removing the OrthoViewManager with `delete_and_cleanup` (Remove Orthogonal Views command), the canvas may become temporarily unresponsive. Clicking outside of Napari and then back on the Napari window usually fixes this.
-- Ongoing: more finegrained control over event syncing between the different viewers. 
 
 ## Contributing
 
