@@ -9,14 +9,13 @@
 [![npe2](https://img.shields.io/badge/plugin-npe2-blue?link=https://napari.org/stable/plugins/index.html)](https://napari.org/stable/plugins/index.html)
 [![Copier](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/copier-org/copier/master/img/badge/badge-grayscale-inverted-border-purple.json)](https://github.com/copier-org/copier)
 
-A napari plugin for dynamically displaying orthogonal views and syncing events between the different viewers. Based on https://napari.org/dev/gallery/multiple_viewer_widget.html.
+A napari plugin for dynamically displaying orthogonal views and syncing events between the different viewers. Based on this [example](https://napari.org/dev/gallery/multiple_viewer_widget.html).
 
 ----------------------------------
 
 This [napari] plugin was generated with [copier] using the [napari-plugin-template].
 
-
-![napari-orthogonal-views](https://github.com/user-attachments/assets/dc4333c6-c801-42d1-9ad5-8f753ef47942)
+![napari_orthogonal_views](https://github.com/user-attachments/assets/27d03e5b-5969-4dd0-b48e-7793ab509bb8)
 
 <!--
 Don't miss the full getting started guide to set up your new package:
@@ -57,9 +56,11 @@ m.is_shown()
 Out[6]: True
 ```
 
-The size of the orthogonal view windows can be adjusted by clicking and dragging the small dot in between the views, optionally one or two views can be hidden entirely. The checkboxes in the bottom right corner can be used to show cross hairs or for more control over camera zoom and axis center syncing.
+The size of the orthogonal view windows can be adjusted by clicking and dragging the small dot in between the views, optionally one or two views can be hidden entirely. The checkboxes in the bottom right corner can be used to show crosshair overlays or for more control over camera zoom and axis center syncing.
+Crosshair overlays are based on [this](https://github.com/napari/napari/pull/8017) and [this](https://github.com/napari/napari/blob/9d0c449553eaf1acc3be1bf9bc0c8b3eec05afc6/examples/dev/overlays.py) example. Pressing 'T' on the keyboard will center all view to the current mouse location. 
 
 By default, all events (including label editing such as painting) are synced across all views. The different views share the same underlying data array and undo/redo history. 
+
 
 ## Known issues and ongoing work
 - Deprecation warnings on 'Window._qt_window', 'LayerList._get_step_size', 'LayerList._get_extent_world'.
