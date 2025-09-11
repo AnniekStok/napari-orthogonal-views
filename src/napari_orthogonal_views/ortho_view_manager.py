@@ -54,11 +54,11 @@ class MainControlsWidget(QWidget):
 
         self.show_orth_views.emit(state)
 
-    def add_controls(self, viewer: Viewer, widgets: list[OrthoViewWidget]):
+    def add_controls(self, widgets: list[OrthoViewWidget]):
         """Add a ControlsWidget with additional controls"""
 
         old_widget = self.controls_widget
-        self.controls_widget = ControlsWidget(viewer=viewer, widgets=widgets)
+        self.controls_widget = ControlsWidget(widgets=widgets)
         self.main_layout.replaceWidget(old_widget, self.controls_widget)
         self.adjustSize()
 
@@ -77,7 +77,7 @@ class MainControlsWidget(QWidget):
 class ControlsWidget(QWidget):
     """QWidget holding QCheckboxes for crosshairs, and syncing of zoom and camera center."""
 
-    def __init__(self, viewer: Viewer, widgets: list[OrthoViewWidget]):
+    def __init__(self, widgets: list[OrthoViewWidget]):
         super().__init__()
 
         self.cross_widget = QCheckBox("Show cross hairs")
@@ -370,7 +370,7 @@ class OrthoViewManager:
 
         # Add controls to main_controls widget
         self.main_controls_widget.add_controls(
-            viewer=self.viewer, widgets=[self.right_widget, self.bottom_widget]
+            widgets=[self.right_widget, self.bottom_widget]
         )
         self.main_controls_widget.controls_widget.cross_widget.stateChanged.connect(
             self.show_cross_hairs
