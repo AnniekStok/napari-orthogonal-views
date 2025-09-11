@@ -84,5 +84,5 @@ jobs:
           pip install -U setuptools setuptools_scm wheel twine build
           git tag
           python -m build .
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      # - name: Publish to PyPI
+      #   uses: pypa/gh-action-pypi-publish@release/v1
