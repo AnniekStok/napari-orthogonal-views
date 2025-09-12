@@ -10,6 +10,7 @@ from napari.layers import Labels, Layer
 from napari.qt import QtViewer
 from napari.utils.events import Event, EventEmitter
 from napari.utils.events.event import WarningEmitter
+from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
     QHBoxLayout,
     QWidget,
@@ -19,6 +20,17 @@ from napari_orthogonal_views.cross_hair_overlay import (
     CrosshairOverlay,
     VispyCrosshairOverlay,
 )
+
+
+def activate_on_hover(qt_viewer):
+    canvas = qt_viewer.canvas.native
+    canvas.setMouseTracking(True)  # ensures we get hover events
+
+    def on_enter(event):
+        canvas.setFocus(Qt.MouseFocusReason)
+        return super(type(canvas), canvas).enterEvent(event)
+
+    canvas.enterEvent = on_enter
 
 
 def copy_layer(layer: Layer, name: str = ""):
@@ -273,6 +285,7 @@ class OrthoViewWidget(QWidget):
         self.vm_container.set_layer_hooks(self._layer_hooks)
         # Create QtViewer instance with viewer model
         self.qt_viewer = QtViewer(self.vm_container.viewer_model)
+        activate_on_hover(self.qt_viewer)
         self.qt_viewer.setAcceptDrops(False)  # no drag and drop here
 
         # Set layout

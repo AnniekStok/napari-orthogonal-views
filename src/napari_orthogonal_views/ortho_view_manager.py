@@ -22,7 +22,10 @@ from napari_orthogonal_views.cross_hair_overlay import (
     CrosshairOverlay,
     VispyCrosshairOverlay,
 )
-from napari_orthogonal_views.ortho_view_widget import OrthoViewWidget
+from napari_orthogonal_views.ortho_view_widget import (
+    OrthoViewWidget,
+    activate_on_hover,
+)
 
 
 class MainControlsWidget(QWidget):
@@ -218,6 +221,11 @@ class OrthoViewManager:
             warnings.simplefilter("ignore")
             self.viewer._overlays["crosshairs"] = cursor_overlay
 
+        # make sure the viewer activates on hover
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            activate_on_hover(self.viewer.window.qt_viewer)
+
         # initialize layer hooks
         self._layer_hooks: dict[type, list[Callable]] = {}
 
@@ -231,6 +239,7 @@ class OrthoViewManager:
 
         # Find and remove the current canvas widget
         self._original_canvas = layout.itemAt(0).widget()
+        self._original_canvas.canvas.native.setMouseTracking(True)
         if self._original_canvas is None:
             raise RuntimeError(
                 "Couldn't locate canvas widget in central layout."
