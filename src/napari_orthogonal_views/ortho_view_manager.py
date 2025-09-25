@@ -4,6 +4,7 @@ import weakref
 from collections.abc import Callable
 
 from napari._vispy.utils.visual import overlay_to_visual
+from napari.utils.notifications import show_warning
 from napari.viewer import Viewer
 from psygnal import Signal
 from qtpy.QtCore import Qt, QTimer
@@ -238,13 +239,13 @@ class OrthoViewManager:
             )
 
         # Find and remove the current canvas widget
-        self._original_canvas = layout.itemAt(0).widget()
-        self._original_canvas.canvas.native.setMouseTracking(True)
-        if self._original_canvas is None:
+        self._original_qt_viewer = layout.itemAt(0).widget()
+        self._original_qt_viewer.canvas.native.setMouseTracking(True)
+        if self._original_qt_viewer is None:
             raise RuntimeError(
                 "Couldn't locate canvas widget in central layout."
             )
-        layout.removeWidget(self._original_canvas)
+        layout.removeWidget(self._original_qt_viewer)
 
         # widgets holding orthoviews and controls
         self.right_widget = QWidget()  # empty widget placeholder
@@ -257,7 +258,7 @@ class OrthoViewManager:
 
         # Build orthogonal layout (splitters + widgets)
         self.h_splitter_top = QSplitter(Qt.Horizontal)
-        self.h_splitter_top.addWidget(self._original_canvas)
+        self.h_splitter_top.addWidget(self._original_qt_viewer)
         self.h_splitter_top.addWidget(self.right_widget)
 
         self.h_splitter_bottom = QSplitter(Qt.Horizontal)
@@ -293,6 +294,18 @@ class OrthoViewManager:
         self.set_splitter_sizes(
             0.01, 0.01
         )  # minimal size for right and bottom
+
+        if len(self.viewer.layers) > 0:
+            show_warning(
+                "Blending of labels layers may not display correctly. You may have to set blending to 'translucent_no_depth' manually for new layers. To ensure correct blending of layers in the main viewer, call OrthoViewManager before adding layers to the viewer."
+            )
+            for (
+                _,
+                value,
+            ) in self._original_qt_viewer.canvas.layer_to_visual.items():
+                value.node.set_gl_state(blend=True, depth_test=False)
+            for layer in self.viewer.layers:
+                layer.blending = "translucent_no_depth"
 
         self._container = container
 
@@ -467,8 +480,8 @@ class OrthoViewManager:
                 self._container = None
 
             # Put the original canvas back
-            if self._original_canvas is not None:
-                layout.insertWidget(0, self._original_canvas)
+            if self._original_qt_viewer is not None:
+                layout.insertWidget(0, self._original_qt_viewer)
 
         # Disconnect all splitter signal handlers
         for splitter, handler in self._splitter_handlers:
