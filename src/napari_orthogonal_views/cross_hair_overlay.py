@@ -80,7 +80,13 @@ class VispyCrosshairOverlay(ViewerOverlayMixin, VispySceneOverlay):
     def _move_crosshairs(self) -> None:
         """Move the crosshairs to the current viewer step"""
 
-        position = self.viewer.dims.current_step
+        step_size = [dim_range.step for dim_range in self.viewer.dims.range]
+        position = [
+            pos * step
+            for pos, step in zip(
+                self.viewer.dims.current_step, step_size, strict=False
+            )
+        ]
 
         displayed = list(self.viewer.dims.displayed[::-1])
         not_displayed = list(self.viewer.dims.not_displayed[::-1])
