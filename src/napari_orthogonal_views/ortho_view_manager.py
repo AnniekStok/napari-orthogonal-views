@@ -114,6 +114,11 @@ class ZoomWidget(QCheckBox):
 
         for widget in self.widgets:
 
+            if state == 2:
+                widget.vm_container.viewer_model.camera.zoom = (
+                    widget.viewer.camera.zoom
+                )
+
             # main viewer to ortho view
             widget.sync_event(
                 widget.viewer.camera.events.zoom,
@@ -151,6 +156,11 @@ class CenterWidget(QCheckBox):
         """Connect or disconnect camera center syncing on each of the ortho view widgets."""
 
         for widget in self.widgets:
+
+            if state == 2:
+                widget.vm_container.viewer_model.camera.center = (
+                    widget.viewer.camera.center
+                )
 
             # create handler to sync specific axis
             def make_handler(w, source_camera, target_camera):
