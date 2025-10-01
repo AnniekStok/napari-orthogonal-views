@@ -163,17 +163,22 @@ class CenterWidget(QCheckBox):
                 )
 
             # create handler to sync specific axis
-            def make_handler(w, source_camera, target_camera):
+            def make_handler(w, source_viewer, target_viewer):
                 def handler(event=None):
                     if w._block_center:
                         return
                     w._block_center = True
                     try:
-                        src_center = list(source_camera.center)
-                        tgt_center = list(target_camera.center)
+                        order = w.vm_container.rel_order
+                        src_cursor = list(source_viewer.cursor.position)
+                        tgt_cursor = [src_cursor[i] for i in order]
+                        src_center = list(source_viewer.camera.center)
+                        tgt_center = list(target_viewer.camera.center)
+                        tgt_center[1:3] = tgt_cursor[1:3]
                         for ax in w.sync_axes:
+                            # to ensure cross hairs are aligned
                             tgt_center[ax] = src_center[ax]
-                        target_camera.center = tuple(tgt_center)
+                        target_viewer.camera.center = tuple(tgt_center)
                     finally:
                         w._block_center = False
 
@@ -184,8 +189,8 @@ class CenterWidget(QCheckBox):
                 widget.viewer.camera.events.center,
                 make_handler(
                     widget,
-                    widget.viewer.camera,
-                    widget.vm_container.viewer_model.camera,
+                    widget.viewer,
+                    widget.vm_container.viewer_model,
                 ),
                 state,
                 key_label=f"center_viewer_to_vm_{id(widget)}",
@@ -196,8 +201,8 @@ class CenterWidget(QCheckBox):
                 widget.vm_container.viewer_model.camera.events.center,
                 make_handler(
                     widget,
-                    widget.vm_container.viewer_model.camera,
-                    widget.viewer.camera,
+                    widget.vm_container.viewer_model,
+                    widget.viewer,
                 ),
                 state,
                 key_label=f"center_vm_to_viewer_{id(widget)}",
