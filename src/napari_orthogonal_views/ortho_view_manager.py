@@ -28,6 +28,8 @@ from napari_orthogonal_views.ortho_view_widget import (
     activate_on_hover,
 )
 
+overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
+
 
 class MainControlsWidget(QWidget):
     """Main controls widget to turn orthogonal views on or off"""
@@ -231,8 +233,9 @@ class OrthoViewManager:
         self.sync_filters = None
 
         # Add crosshairs overlay to main viewer
-        overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
-        cursor_overlay = CrosshairOverlay(blending="translucent_no_depth")
+        cursor_overlay = CrosshairOverlay(
+            blending="translucent_no_depth", axis_order=(0, 1, 2)
+        )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.viewer._overlays["crosshairs"] = cursor_overlay

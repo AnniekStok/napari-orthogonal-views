@@ -4,7 +4,6 @@ from collections.abc import Callable
 from types import MethodType
 
 import napari
-from napari._vispy.utils.visual import overlay_to_visual
 from napari.components.viewer_model import ViewerModel
 from napari.layers import Labels, Layer
 from napari.qt import QtViewer
@@ -16,10 +15,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from napari_orthogonal_views.cross_hair_overlay import (
-    CrosshairOverlay,
-    VispyCrosshairOverlay,
-)
+from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
 
 
 def activate_on_hover(qt_viewer):
@@ -91,8 +87,9 @@ class ViewerModelContainer:
         self.sync_filters = sync_filters or {}
 
         # Add crosshair overlays (initially invisible)
-        overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
-        cursor_overlay = CrosshairOverlay(blending="translucent_no_depth")
+        cursor_overlay = CrosshairOverlay(
+            blending="translucent_no_depth", axis_order=self.rel_order
+        )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.viewer_model._overlays["crosshairs"] = cursor_overlay
