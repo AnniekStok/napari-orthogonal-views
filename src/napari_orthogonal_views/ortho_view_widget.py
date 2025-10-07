@@ -482,7 +482,22 @@ class OrthoViewWidget(QWidget):
             self.viewer,
             self.vm_container.viewer_model,
         ]:
-            if model.dims is event.source:
+            if model.dims.order is event.source.order:
                 continue
             model.dims.current_step = event.value
+
+            # check if the camera center is in the field of view, if not, reset
+            camera_center = model.camera.center
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                extent, scene_size, corner = model._get_scene_parameters()
+                if not (
+                    camera_center[1] > extent[0][0]
+                    and camera_center[1] < extent[1][0]
+                    and camera_center[2] > extent[0][1]
+                    and camera_center[2] < extent[1][1]
+                ):
+                    model.camera.center = model._calculate_view_center(
+                        corner, scene_size
+                    )
         self._block_center = False
