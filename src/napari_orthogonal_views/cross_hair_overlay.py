@@ -1,45 +1,7 @@
 import numpy as np
 from napari._vispy.overlays.base import ViewerOverlayMixin, VispySceneOverlay
 from napari.components.overlays.base import SceneOverlay
-from napari.components.viewer_model import ViewerModel
-from napari.utils.action_manager import action_manager
-from napari.utils.notifications import show_info
 from vispy.scene import Line
-
-
-def center_cross_on_mouse(
-    viewer_model: ViewerModel,
-):
-    """move the cross to the mouse position"""
-
-    if not getattr(viewer_model, "mouse_over_canvas", True):
-        show_info(
-            "Mouse is not over the canvas. You may need to click on the canvas."
-        )
-        return
-
-    viewer_model.dims.current_step = tuple(
-        np.round(
-            [
-                max(min_, min(p, max_)) / step
-                for p, (min_, max_, step) in zip(
-                    viewer_model.cursor.position,
-                    viewer_model.dims.range,
-                    strict=False,
-                )
-            ]
-        ).astype(int)
-    )
-
-
-def init_actions():
-    action_manager.register_action(
-        name="napari:move_point",
-        command=center_cross_on_mouse,
-        description="Move dims point to mouse position",
-        keymapprovider=ViewerModel,
-    )
-    action_manager.bind_shortcut("napari:move_point", "T")
 
 
 class Crosshairs(Line):
@@ -141,4 +103,3 @@ class CrosshairOverlay(SceneOverlay):
     def __init__(self, *, axis_order=(0, 1, 2), **kwargs):
         super().__init__(**kwargs)
         object.__setattr__(self, "axis_order", tuple(axis_order))
-        init_actions()

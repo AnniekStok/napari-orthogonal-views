@@ -3,8 +3,11 @@ import warnings
 import weakref
 from collections.abc import Callable
 
+import numpy as np
 from napari._vispy.utils.visual import overlay_to_visual
-from napari.utils.notifications import show_warning
+from napari.components.viewer_model import ViewerModel
+from napari.utils.action_manager import action_manager
+from napari.utils.notifications import show_info, show_warning
 from napari.viewer import Viewer
 from psygnal import Signal
 from qtpy.QtCore import Qt, QTimer
@@ -29,6 +32,42 @@ from napari_orthogonal_views.ortho_view_widget import (
 )
 
 overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
+
+
+def center_cross_on_mouse(
+    viewer_model: ViewerModel,
+):
+    """move the cross to the mouse position"""
+
+    if not getattr(viewer_model, "mouse_over_canvas", True):
+        show_info(
+            "Mouse is not over the canvas. You may need to click on the canvas."
+        )
+        return
+
+    step = tuple(
+        np.round(
+            [
+                max(min_, min(p, max_)) / step
+                for p, (min_, max_, step) in zip(
+                    viewer_model.cursor.position,
+                    viewer_model.dims.range,
+                    strict=False,
+                )
+            ]
+        ).astype(int)
+    )
+    viewer_model.dims.current_step = step
+
+
+def init_actions():
+    action_manager.register_action(
+        name="napari:move_point",
+        command=center_cross_on_mouse,
+        description="Move dims point to mouse position",
+        keymapprovider=ViewerModel,
+    )
+    action_manager.bind_shortcut("napari:move_point", "T")
 
 
 class MainControlsWidget(QWidget):
@@ -160,9 +199,8 @@ class CenterWidget(QCheckBox):
         for widget in self.widgets:
 
             if state == 2:
-                widget.vm_container.viewer_model.camera.center = (
-                    widget.viewer.camera.center
-                )
+                widget.viewer.reset_view()  # reset the view to make sure everything is
+                # aligned immediately.
 
             # create handler to sync specific axis
             def make_handler(w, source_viewer, target_viewer):
@@ -171,12 +209,8 @@ class CenterWidget(QCheckBox):
                         return
                     w._block_center = True
                     try:
-                        order = w.vm_container.rel_order
-                        src_cursor = list(source_viewer.cursor.position)
-                        tgt_cursor = [src_cursor[i] for i in order]
                         src_center = list(source_viewer.camera.center)
                         tgt_center = list(target_viewer.camera.center)
-                        tgt_center[1:3] = tgt_cursor[1:3]
                         for ax in w.sync_axes:
                             # to ensure cross hairs are aligned
                             tgt_center[ax] = src_center[ax]
@@ -231,6 +265,7 @@ class OrthoViewManager:
         self._splitter_handlers: list[tuple[QSplitter, object]] = []
         self._shown = False
         self.sync_filters = None
+        init_actions()
 
         # Add crosshairs overlay to main viewer
         cursor_overlay = CrosshairOverlay(
