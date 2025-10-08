@@ -198,10 +198,6 @@ class CenterWidget(QCheckBox):
 
         for widget in self.widgets:
 
-            if state == 2:
-                widget.viewer.reset_view()  # reset the view to make sure everything is
-                # aligned immediately.
-
             # create handler to sync specific axis
             def make_handler(w, source_viewer, target_viewer):
                 def handler(event=None):
@@ -243,6 +239,20 @@ class CenterWidget(QCheckBox):
                 state,
                 key_label=f"center_vm_to_viewer_{id(widget)}",
             )
+
+            if state == 2:
+                # Align camera centers immediately
+                viewer_center = list(widget.viewer.camera.center)
+                viewer_center_reordered = [
+                    viewer_center[i]
+                    for i in widget.vm_container.viewer_model.dims.order
+                ]
+                widget_center = list(
+                    widget.vm_container.viewer_model.camera.center
+                )
+                widget_center[-2] = viewer_center_reordered[-2]
+                widget_center[-1] = viewer_center_reordered[-1]
+                widget.vm_container.viewer_model.camera.center = widget_center
 
 
 class OrthoViewManager:
@@ -362,7 +372,16 @@ class OrthoViewManager:
 
         self._container = container
 
-    def show_cross_hairs(self, state: bool) -> None:
+    def set_cross_hairs(self, state: bool = True) -> None:
+        """Activate/deactivate the checkbox to set the crosshairs."""
+
+        if not self.is_shown():
+            return
+        self.main_controls_widget.controls_widget.cross_widget.setChecked(
+            state
+        )
+
+    def show_cross_hairs(self, state: int) -> None:
         """Show or hide the crosshairs overlay on all viewers"""
 
         state = state == 2
@@ -378,6 +397,22 @@ class OrthoViewManager:
                 self.bottom_widget.vm_container.viewer_model._overlays[
                     "crosshairs"
                 ].visible = state
+
+    def set_zoom_sync(self, state: bool = True):
+        """Activate the zoom syncing in the controls widget"""
+        if not self.is_shown():
+            return
+
+        self.main_controls_widget.controls_widget.zoom_widget.setChecked(state)
+
+    def set_center_sync(self, state: bool = True):
+        """Activate the zoom syncing in the controls widget"""
+        if not self.is_shown():
+            return
+
+        self.main_controls_widget.controls_widget.center_widget.setChecked(
+            state
+        )
 
     def register_layer_hook(self, layer_type: type, hook: Callable):
         """Register a hook to be applied to any matching layer type."""
