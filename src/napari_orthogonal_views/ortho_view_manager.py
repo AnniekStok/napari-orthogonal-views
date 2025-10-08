@@ -275,6 +275,9 @@ class OrthoViewManager:
         self._splitter_handlers: list[tuple[QSplitter, object]] = []
         self._shown = False
         self.sync_filters = None
+        self.activate_checkboxes = (
+            False  # automatically activate checkboxes when shown
+        )
         init_actions()
 
         # Add crosshairs overlay to main viewer
@@ -490,6 +493,12 @@ class OrthoViewManager:
         self.set_splitter_sizes(0.3, 0.3)
 
         self._shown = True
+
+        # activate checkboxes by default
+        if self.activate_checkboxes:
+            self.set_cross_hairs(True)
+            self.set_zoom_sync(True)
+            self.set_center_sync(True)
 
     def hide(self) -> None:
         """Remove the OrthoViewWidgets and replace with empty QWidget placeholders. Make
