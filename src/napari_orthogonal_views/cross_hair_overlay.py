@@ -57,7 +57,7 @@ class Crosshairs(Line):
 
     def set_position(self, value: np.ndarray) -> None:
         self.set_data(
-            pos=self._base_segments + value, color=self._colors, width=3
+            pos=self._base_segments + value, color=self._colors, width=2
         )
 
 
