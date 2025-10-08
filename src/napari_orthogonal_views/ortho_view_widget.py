@@ -486,18 +486,49 @@ class OrthoViewWidget(QWidget):
                 continue
             model.dims.current_step = event.value
 
-            # check if the camera center is in the field of view, if not, reset
-            camera_center = model.camera.center
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                extent, scene_size, corner = model._get_scene_parameters()
-                if not (
-                    camera_center[1] > extent[0][0]
-                    and camera_center[1] < extent[1][0]
-                    and camera_center[2] > extent[0][1]
-                    and camera_center[2] < extent[1][1]
-                ):
-                    model.camera.center = model._calculate_view_center(
-                        corner, scene_size
-                    )
+            # check if the camera center is in the field of view, if not, adjust
+            camera_center = list(model.camera.center)
+            new_y_center, new_x_center = check_center(
+                model, model.dims.current_step
+            )
+            camera_center[-2] = new_y_center
+            camera_center[-1] = new_x_center
+            model.camera.center = camera_center
+
         self._block_center = False
+
+
+def check_center(model: ViewerModel, coords: list[int]) -> tuple[int, int]:
+    """Check if the given coordinates are in the current field of view, and if not adjust
+    the camera center
+
+    Args:
+        coords (list[int]): list of current step coordinates to check.
+
+    Returns:
+        tuple [int, int]: (updated) y and x center coordinates to ensure the coordinates
+        are visible.
+    """
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        view_box = model._get_viewbox_size()
+    zoom = model.camera.zoom
+    center = model.camera.center
+    h = view_box[0] / zoom
+    w = view_box[1] / zoom
+    min_h = center[-2] - (h / 2)
+    max_h = center[-2] + (h / 2)
+    min_w = center[-1] - (w / 2)
+    max_w = center[-1] + (w / 2)
+
+    order = model.dims.order
+    coords_reordered = [coords[i] for i in order]
+
+    y_in_view = coords_reordered[-2] > min_h and coords_reordered[-2] < max_h
+    x_in_view = coords_reordered[-1] > min_w and coords_reordered[-1] < max_w
+
+    new_x_center = coords_reordered[-1] if not x_in_view else center[-1]
+    new_y_center = coords_reordered[-2] if not y_in_view else center[-2]
+
+    return new_y_center, new_x_center
