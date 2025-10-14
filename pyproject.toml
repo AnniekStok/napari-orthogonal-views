@@ -29,6 +29,7 @@ requires-python = ">=3.10"
 # or any other Qt bindings directly (e.g. PyQt5, PySide2).
 # See best practices: https://napari.org/stable/plugins/building_a_plugin/best_practices.html
 dependencies = [
+    "napari>=0.5,<1",
     "numpy",
     "qtpy",
 ]
