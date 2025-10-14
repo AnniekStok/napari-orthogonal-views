@@ -9,21 +9,55 @@ from napari_orthogonal_views.ortho_view_widget import OrthoViewWidget
 
 
 def test_add_move_remove_layer(make_napari_viewer, qtbot):
+    """Test that adding, moving, and removing layers is correctly synced between the main
+    viewer and the orthogonal views. Verify that attributes such as brush_size are
+    correctly copied when creating a new layer from an existing one.
+    """
+
+    # Create viewer and orthoview manager
     viewer = make_napari_viewer()
     m = _get_manager(viewer)
+
+    # Add a test layer first, before showing the ortho views to test initial copy of
+    # attributes
+    labels = Labels(np.zeros((2, 2, 2), dtype=np.uint8))
+    labels.name = "test_labels_layer"
+    viewer.add_layer(labels)
+    labels.brush_size = (
+        50  # change value to test if this property is copied correctly
+    )
+
+    # Show ortho views, ensure layer is copied, and that the brush_size value is copied
     show_orthogonal_views(viewer)
     qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
     assert isinstance(m.right_widget, OrthoViewWidget)
+
+    assert (
+        "test_labels_layer" in m.right_widget.vm_container.viewer_model.layers
+    )
+    assert (
+        "test_labels_layer" in m.bottom_widget.vm_container.viewer_model.layers
+    )
+
+    assert isinstance(
+        m.right_widget.vm_container.viewer_model.layers["test_labels_layer"],
+        Labels,
+    )
+    assert isinstance(
+        m.bottom_widget.vm_container.viewer_model.layers["test_labels_layer"],
+        Labels,
+    )
+
+    assert (
+        m.right_widget.vm_container.viewer_model.layers[0].brush_size
+        == labels.brush_size
+        == 50
+    )
 
     # Test image layer
     layer = Image(np.zeros((2, 2, 2)))
     layer.name = "test_layer"
     viewer.add_layer(layer)
-
-    # test labels layer
-    labels = Labels(np.zeros((2, 2, 2), dtype=np.uint8))
-    labels.name = "test_labels_layer"
-    viewer.add_layer(labels)
 
     # Check that the layer was added correctly to both viewer models
     assert "test_layer" in m.right_widget.vm_container.viewer_model.layers
@@ -35,38 +69,24 @@ def test_add_move_remove_layer(make_napari_viewer, qtbot):
         m.bottom_widget.vm_container.viewer_model.layers["test_layer"], Image
     )
 
-    assert (
-        "test_labels_layer" in m.right_widget.vm_container.viewer_model.layers
-    )
-    assert (
-        "test_labels_layer" in m.bottom_widget.vm_container.viewer_model.layers
-    )
-    assert isinstance(
-        m.right_widget.vm_container.viewer_model.layers["test_labels_layer"],
-        Labels,
-    )
-    assert isinstance(
-        m.bottom_widget.vm_container.viewer_model.layers["test_labels_layer"],
-        Labels,
-    )
-
     # Move layer and check the order
     viewer.layers.move(1, 0)
-    assert viewer.layers[0].name == "test_labels_layer"
-    assert viewer.layers[1].name == "test_layer"
+    assert viewer.layers[0].name == "test_layer"
+    assert viewer.layers[1].name == "test_labels_layer"
+
     assert (
-        m.right_widget.vm_container.viewer_model.layers[0].name
+        m.right_widget.vm_container.viewer_model.layers[1].name
         == "test_labels_layer"
     )
     assert (
-        m.right_widget.vm_container.viewer_model.layers[1].name == "test_layer"
-    )
-    assert (
-        m.bottom_widget.vm_container.viewer_model.layers[0].name
-        == "test_labels_layer"
+        m.right_widget.vm_container.viewer_model.layers[0].name == "test_layer"
     )
     assert (
         m.bottom_widget.vm_container.viewer_model.layers[1].name
+        == "test_labels_layer"
+    )
+    assert (
+        m.bottom_widget.vm_container.viewer_model.layers[0].name
         == "test_layer"
     )
 
@@ -93,6 +113,14 @@ def test_add_move_remove_layer(make_napari_viewer, qtbot):
 
 
 def test_sync(make_napari_viewer, qtbot):
+    """Test that the sync connection between the main viewer and the orthogonal views is
+    setup correctly.
+        - Test viewer dimension step syncing.
+        - Test fowward and reverse syncing of layer properties such as contour, opacity,
+            visibility.
+        - Test syncing of layer data.
+    """
+
     viewer = make_napari_viewer()
     m = _get_manager(viewer)
     show_orthogonal_views(viewer)
@@ -173,6 +201,11 @@ def test_sync(make_napari_viewer, qtbot):
 
 
 def test_layer_hook(make_napari_viewer, qtbot):
+    """Test setting optional custom layer hooks. This is to forward specific
+    events/outcomes to the original layer (could be a subclass) for further downstream
+    processing. In this test, a function is created that captures a click event on the
+    copied layer and changes a value on the original layer.
+    """
 
     viewer = make_napari_viewer()
     m = _get_manager(viewer)
@@ -195,6 +228,7 @@ def test_layer_hook(make_napari_viewer, qtbot):
                     world=True,
                 )
 
+                # update the selected label to the value that was clicked on
                 orig_layer.selected_label = label
 
         # Wrap and attach click callback
