@@ -15,7 +15,7 @@ A napari plugin for dynamically displaying orthogonal views and syncing events b
 
 This [napari] plugin was generated with [copier] using the [napari-plugin-template].
 
-![napari_orthogonal_views](https://github.com/user-attachments/assets/27d03e5b-5969-4dd0-b48e-7793ab509bb8)
+![orthoviews](https://github.com/user-attachments/assets/9d1ea326-866d-4af7-9ea6-8e56046cf6f2)
 
 <!--
 Don't miss the full getting started guide to set up your new package:
