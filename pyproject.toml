@@ -1,7 +1,7 @@
 [project]
 name = "napari-orthogonal-views"
 dynamic = ["version"]
-description = "A napari plugin for dynamically displaying orthogonal views and syncing events between the different viewers. "
+description = "A napari plugin for dynamically displaying orthogonal views and syncing events between the different viewers."
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
@@ -33,6 +33,10 @@ dependencies = [
     "numpy",
     "qtpy",
 ]
+
+[project.urls]
+Homepage = "https://github.com/AnniekStok/napari-orthogonal-views"
+Issues = "https://github.com/AnniekStok/napari-orthogonal-views/issues"
 
 [project.optional-dependencies]
 # Allow easily installation with the full, default napari installation
