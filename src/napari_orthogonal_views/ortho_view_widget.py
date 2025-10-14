@@ -37,7 +37,7 @@ def copy_layer(layer: Layer, name: str = ""):
     if isinstance(layer, Labels):
         res_layer._undo_history = layer._undo_history
         res_layer._redo_history = layer._redo_history
-        res_layer.contour = layer.contour
+
     return res_layer
 
 
@@ -119,6 +119,15 @@ class ViewerModelContainer:
         for property_name in get_property_names(orig_layer):
             # Forward sync: orig_layer → copied_layer
             if not is_excluded(orig_layer, property_name, "forward"):
+
+                # first copy the value immediately
+                setattr(
+                    copied_layer,
+                    property_name,
+                    getattr(orig_layer, property_name),
+                )
+
+                # set up syncing
                 getattr(orig_layer.events, property_name).connect(
                     own_partial(
                         self.sync_property,
