@@ -9,7 +9,7 @@
 [![npe2](https://img.shields.io/badge/plugin-npe2-blue?link=https://napari.org/stable/plugins/index.html)](https://napari.org/stable/plugins/index.html)
 [![Copier](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/copier-org/copier/master/img/badge/badge-grayscale-inverted-border-purple.json)](https://github.com/copier-org/copier)
 
-A napari plugin for dynamically displaying orthogonal views and syncing events between the different viewers. Based on this [example](https://napari.org/dev/gallery/multiple_viewer_widget.html).
+A napari plugin for dynamically displaying orthogonal views and syncing events between the different viewers.
 
 ----------------------------------
 
@@ -25,15 +25,17 @@ and review the napari docs for plugin developers:
 https://napari.org/stable/plugins/index.html
 -->
 
+This plugin is based on this [example](https://napari.org/dev/gallery/multiple_viewer_widget.html), with extra display and synchronization functionalities. The crosshair overlay is based on [this](https://github.com/napari/napari/pull/8017) and [this](https://github.com/napari/napari/blob/9d0c449553eaf1acc3be1bf9bc0c8b3eec05afc6/examples/dev/overlays.py) example.
+
 ## Installation
 
-You can install `napari-orthogonal-views` via [pip]:
+You can install the latest development version of `napari-orthogonal-views` via [pip]:
 
 ```
 pip install git+https://github.com/AnniekStok/napari-orthogonal-views.git
 ```
 ## Usage
-Commands are available in Views>Commands Palette (CMD+SHIFT+P):
+This plugin is not discoverable as a widget, but commands are available in Views>Commands Palette (CMD+SHIFT+P):
   - Show Orthogonal Views
   - Hide Orthogonal Views
   - Toggle Orthogonal Views
@@ -56,13 +58,15 @@ m.is_shown()
 Out[6]: True
 ```
 
-The size of the orthogonal view windows can be adjusted by clicking and dragging the small dot in between the views, optionally one or two views can be hidden entirely. The checkboxes in the bottom right corner can be used to show crosshair overlays or for more control over camera zoom and axis center syncing.
-Crosshair overlays are based on [this](https://github.com/napari/napari/pull/8017) and [this](https://github.com/napari/napari/blob/9d0c449553eaf1acc3be1bf9bc0c8b3eec05afc6/examples/dev/overlays.py) example. Pressing 'T' on the keyboard will center all view to the current mouse location. 
+The size of the orthogonal view windows can be adjusted by clicking and dragging the small dot in between the views, optionally one or two views can be hidden entirely. The checkboxes in the bottom right corner can be used to show the crosshair overlay or for more control over camera zoom and axis center syncing.
+Pressing `T` on the keyboard will center all views to the current mouse location. 
 
 By default, all events (including label editing such as painting) are synced across all views. The different views share the same underlying data array and undo/redo history. 
 
 ## Syncing properties
 By default, all layer properties should be synced between the layer on the main viewer and the orthoviews. However, it is possible to have more finegrained control over the synced properties via the `set_sync_filters` function, as long as it is specified *before* the orthogonal views are activated. 
+
+For example, to disable syncing of all properties on Tracks layers and specifically the contour property on Labels layers: 
 
 ```
 from napari_orthogonal_views.ortho_view_manager import _get_manager
@@ -79,12 +83,11 @@ sync_filters = {
 }
 m.set_sync_filters(sync_filters)
 
-## add labels layers and activate orthogonal views
-
 ```
+Then add 3D data (e.g. File > Open Sample > napari builtins > Balls (3D)). Activate the labels layer and change the contour value. You should see that the contour property is not synced from main viewer to orthoviews now. 
 
 ## Known issues and ongoing work
-- Deprecation warnings on 'Window._qt_window', 'LayerList._get_step_size', 'LayerList._get_extent_world'.
+- Deprecation warnings on `Window._qt_window`, `LayerList._get_step_size`, `LayerList._get_extent_world` (suppressed for now).
 - After removing the OrthoViewManager with `delete_and_cleanup` (Remove Orthogonal Views command), the canvas may become temporarily unresponsive. Clicking outside of Napari and then back on the Napari window usually fixes this.
 
 ## Contributing
@@ -99,7 +102,7 @@ Distributed under the terms of the [BSD-3] license,
 
 ## Issues
 
-If you encounter any problems, please [file an issue] along with a detailed description.
+If you encounter any problems, please [file an issue](https://github.com/AnniekStok/napari-orthogonal-views/issues/) along with a detailed description.
 
 [napari]: https://github.com/napari/napari
 [copier]: https://copier.readthedocs.io/en/stable/
