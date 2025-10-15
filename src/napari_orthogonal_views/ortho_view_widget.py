@@ -122,11 +122,14 @@ class ViewerModelContainer:
             if not is_excluded(orig_layer, property_name, "forward"):
 
                 # first copy the value immediately
-                setattr(
-                    copied_layer,
-                    property_name,
-                    getattr(orig_layer, property_name),
-                )
+                if (
+                    property_name != "current_size"
+                ):  # skip initially (special case)
+                    setattr(
+                        copied_layer,
+                        property_name,
+                        getattr(orig_layer, property_name),
+                    )
 
                 # set up syncing
                 getattr(orig_layer.events, property_name).connect(
