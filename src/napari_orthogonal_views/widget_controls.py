@@ -41,7 +41,7 @@ class MainControlsWidget(QWidget):
 
         self.show_orth_views.emit(state)
 
-    def add_controls(self, widgets: list[OrthoViewWidget]):
+    def add_controls(self, widgets: list[OrthoViewWidget]) -> None:
         """Add a ControlsWidget with additional controls"""
 
         old_widget = self.controls_widget
@@ -49,7 +49,7 @@ class MainControlsWidget(QWidget):
         self.main_layout.replaceWidget(old_widget, self.controls_widget)
         self.adjustSize()
 
-    def remove_controls(self):
+    def remove_controls(self) -> None:
         """Remove ControlsWidget from the layout"""
 
         if isinstance(self.controls_widget, ControlsWidget):
@@ -92,7 +92,7 @@ class ZoomWidget(QCheckBox):
         self.widgets = widgets
         self.stateChanged.connect(self.set_zoom_sync)
 
-    def set_zoom_sync(self, state: bool):
+    def set_zoom_sync(self, state: bool) -> None:
         """Connect or disconnect camera zoom syncing on each of the ortho view widgets."""
 
         for widget in self.widgets:
@@ -135,7 +135,7 @@ class CenterWidget(QCheckBox):
         self.widgets = widgets
         self.stateChanged.connect(self.set_center_sync)
 
-    def set_center_sync(self, state: bool):
+    def set_center_sync(self, state: bool) -> None:
         """Connect or disconnect camera center syncing on each of the ortho view widgets."""
 
         for widget in self.widgets:

@@ -18,9 +18,10 @@ from qtpy.QtWidgets import (
 from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
 
 
-def activate_on_hover(qt_viewer):
+def activate_on_hover(qt_viewer: QtViewer):
+    """Activate mouse tracking on the canvas, so that it is not necessary to click first."""
     canvas = qt_viewer.canvas.native
-    canvas.setMouseTracking(True)  # ensures we get hover events
+    canvas.setMouseTracking(True)
 
     def on_enter(event):
         canvas.setFocus(Qt.MouseFocusReason)
@@ -29,21 +30,26 @@ def activate_on_hover(qt_viewer):
     canvas.enterEvent = on_enter
 
 
-def copy_layer(layer: Layer, name: str = ""):
-    res_layer = Layer.create(*layer.as_layer_data_tuple())
-    res_layer.metadata["viewer_name"] = name
+def copy_layer(layer: Layer, name: str = "") -> Layer:
+    """Clone a napari layer from its data (shallow copy, both original layer and copied
+    layer share the same underlying data)."""
+
+    copied_layer = Layer.create(*layer.as_layer_data_tuple())
+    copied_layer.metadata["viewer_name"] = name
 
     # connect to the same undo/redo history in the case of labels layers
     if isinstance(layer, Labels):
-        res_layer._undo_history = layer._undo_history
-        res_layer._redo_history = layer._redo_history
+        copied_layer._undo_history = layer._undo_history
+        copied_layer._redo_history = layer._redo_history
 
-    return res_layer
+    return copied_layer
 
 
-def get_property_names(layer: Layer):
+def get_property_names(layer: Layer) -> list[str]:
+    """Return a list of all the layer properties (opacity, mode, ...) that emit events."""
+
     klass = layer.__class__
-    res = []
+    emitter_list = []
     for event_name, event_emitter in layer.events.emitters.items():
         if isinstance(event_emitter, WarningEmitter):
             continue
@@ -53,8 +59,8 @@ def get_property_names(layer: Layer):
             isinstance(getattr(klass, event_name, None), property)
             and getattr(klass, event_name).fset is not None
         ):
-            res.append(event_name)
-    return res
+            emitter_list.append(event_name)
+    return emitter_list
 
 
 class own_partial:
@@ -94,11 +100,6 @@ class ViewerModelContainer:
             warnings.simplefilter("ignore")
             self.viewer_model._overlays["crosshairs"] = cursor_overlay
 
-    def set_layer_hooks(self, hooks: dict[type, list[Callable]]) -> None:
-        """Replace current hook mapping."""
-
-        self._layer_hooks = hooks
-
     def _sync_layer_properties(
         self, orig_layer: Layer, copied_layer: Layer
     ) -> None:
@@ -130,7 +131,7 @@ class ViewerModelContainer:
                 # set up syncing
                 getattr(orig_layer.events, property_name).connect(
                     own_partial(
-                        self.sync_property,
+                        self._sync_property,
                         property_name,
                         orig_layer,
                         copied_layer,
@@ -141,12 +142,62 @@ class ViewerModelContainer:
             if not is_excluded(orig_layer, property_name, "reverse"):
                 getattr(copied_layer.events, property_name).connect(
                     own_partial(
-                        self.sync_property,
+                        self._sync_property,
                         property_name,
                         copied_layer,
                         orig_layer,
                     )
                 )
+
+    def _update_data(
+        self, source: Labels, target: Labels, event: Event
+    ) -> None:
+        """Copy data from source layer to target layer, which triggers a data event on
+        the target layer. Block syncing to itself (VM1 -> orig -> VM1 is blocked, but
+        VM1 -> orig -> VM2 is not blocked)
+        Args:
+            source: the source Labels layer
+            target: the target Labels layer
+            event: the event to be triggered (not used)"""
+
+        self._block = True  # no syncing to itself is necessary
+        target.data = (
+            source.data
+        )  # trigger data event so that it can sync to other viewer models (only if
+        # target layer is orig_layer)
+        self._block = False
+
+    def _sync_name(
+        self, orig_layer: Layer, copied_layer: Layer, event: Event
+    ) -> None:
+        """Forward the renaming event from original layer to copied layer"""
+
+        copied_layer.name = orig_layer.name
+
+    def _sync_property(
+        self,
+        property_name: str,
+        source_layer: Layer,
+        target_layer: Layer,
+        event: Event,
+    ) -> None:
+        """Sync a property of a layer in this viewer model."""
+
+        if self._block:
+            return
+
+        self._block = True
+        setattr(
+            target_layer,
+            property_name,
+            getattr(source_layer, property_name),
+        )
+        self._block = False
+
+    def set_layer_hooks(self, hooks: dict[type, list[Callable]]) -> None:
+        """Replace current hook mapping."""
+
+        self._layer_hooks = hooks
 
     def add_layer(self, orig_layer: Layer, index: int) -> None:
         """Set the layers of the contained ViewerModel."""
@@ -158,7 +209,7 @@ class ViewerModelContainer:
 
         # sync name
         def sync_name_wrapper(event):
-            return self.sync_name(orig_layer, copied_layer, event)
+            return self._sync_name(orig_layer, copied_layer, event)
 
         orig_layer.events.name.connect(sync_name_wrapper)
 
@@ -189,21 +240,21 @@ class ViewerModelContainer:
                 source_layer.redo = MethodType(wrapped_redo, source_layer)
 
             # Wrap undo/redo
-            wrap_undo_redo(copied_layer, orig_layer, self.update_data)
-            wrap_undo_redo(orig_layer, copied_layer, self.update_data)
+            wrap_undo_redo(copied_layer, orig_layer, self._update_data)
+            wrap_undo_redo(orig_layer, copied_layer, self._update_data)
 
             # if the original layer is a labels layer, we want to connect to the paint
             # event, because we need it in order to invoke syncing between the different
             # viewers. (Paint event does not trigger 'data' event by itself).
             # We do not need to connect to the eraser and fill bucket separately.
             copied_layer.events.paint.connect(
-                lambda event: self.update_data(
+                lambda event: self._update_data(
                     source=copied_layer, target=orig_layer, event=event
                 )  # copy data from copied_layer to orig_layer (orig_layer emits signal,
                 # which triggers update on other viewer models, if present)
             )
             orig_layer.events.paint.connect(
-                lambda event: self.update_data(
+                lambda event: self._update_data(
                     source=orig_layer, target=copied_layer, event=event
                 )  # copy data from orig_layer to copied_layer (copied_layer emits signal
                 # but we don't process it)
@@ -214,51 +265,6 @@ class ViewerModelContainer:
             if isinstance(orig_layer, hook_type):
                 for hook in hooks:
                     hook(orig_layer, copied_layer)
-
-    def update_data(
-        self, source: Labels, target: Labels, event: Event
-    ) -> None:
-        """Copy data from source layer to target layer, which triggers a data event on
-        the target layer. Block syncing to itself (VM1 -> orig -> VM1 is blocked, but
-        VM1 -> orig -> VM2 is not blocked)
-        Args:
-            source: the source Labels layer
-            target: the target Labels layer
-            event: the event to be triggered (not used)"""
-
-        self._block = True  # no syncing to itself is necessary
-        target.data = (
-            source.data
-        )  # trigger data event so that it can sync to other viewer models (only if
-        # target layer is orig_layer)
-        self._block = False
-
-    def sync_name(
-        self, orig_layer: Layer, copied_layer: Layer, event: Event
-    ) -> None:
-        """Forward the renaming event from original layer to copied layer"""
-
-        copied_layer.name = orig_layer.name
-
-    def sync_property(
-        self,
-        property_name: str,
-        source_layer: Layer,
-        target_layer: Layer,
-        event: Event,
-    ) -> None:
-        """Sync a property of a layer in this viewer model."""
-
-        if self._block:
-            return
-
-        self._block = True
-        setattr(
-            target_layer,
-            property_name,
-            getattr(source_layer, property_name),
-        )
-        self._block = False
 
 
 class OrthoViewWidget(QWidget):
@@ -276,7 +282,9 @@ class OrthoViewWidget(QWidget):
         super().__init__()
         self.viewer = viewer
         self.viewer.axes.visible = True
-        self.viewer.axes.events.visible.connect(self.set_orth_views_dims_order)
+        self.viewer.axes.events.visible.connect(
+            self._set_orth_views_dims_order
+        )
         if sync_axes is None:
             sync_axes = [0]
         self.sync_axes = sync_axes
@@ -288,10 +296,13 @@ class OrthoViewWidget(QWidget):
         self.vm_container = ViewerModelContainer(
             title="orthogonal view", rel_order=order, sync_filters=sync_filters
         )
+
+        # Add optional layer hooks
         self.vm_container.set_layer_hooks(self._layer_hooks)
+
         # Create QtViewer instance with viewer model
         self.qt_viewer = QtViewer(self.vm_container.viewer_model)
-        activate_on_hover(self.qt_viewer)
+        activate_on_hover(self.qt_viewer)  # activate without clicking
         self.qt_viewer.setAcceptDrops(False)  # no drag and drop here
 
         # Set layout
@@ -314,6 +325,7 @@ class OrthoViewWidget(QWidget):
 
         # Connect to events
         self._connections = []
+
         # Layer events
         self._connect(self.viewer.layers.events.inserted, self._layer_added)
         self._connect(self.viewer.layers.events.removed, self._layer_removed)
@@ -322,6 +334,7 @@ class OrthoViewWidget(QWidget):
             self.viewer.layers.selection.events.active,
             self._layer_selection_changed,
         )
+
         # Viewer events
         self._connect(self.viewer.events.reset_view, self._reset_view)
         self._connect(
@@ -332,53 +345,8 @@ class OrthoViewWidget(QWidget):
             self._update_current_step,
         )  # reverse dims sync
 
-        # Adjust dimensions for orthogonal views
-        self.set_orth_views_dims_order()
-
-    def sync_event(
-        self,
-        source_emitter: EventEmitter,
-        target_callable: Callable,
-        sync: bool,
-        key_label: str | None = None,
-    ) -> None:
-        """
-        Connect or disconnect an event from a source emitter to a target callable.
-
-        Args:
-            source_emitter (napari EventEmitter)
-                The source event emitter (e.g., viewer.camera.events.zoom).
-            target_callable (callable)
-                Function to call when the source event fires.
-                Signature: target_callable(event)
-            sync (bool):
-                True to connect, False to disconnect.
-            key_label (str): optional name to store this connection by.
-        """
-
-        if not hasattr(self, "_sync_handlers"):
-            # maps key_label -> (emitter, handler)
-            self._sync_handlers = {}
-
-        if key_label is None:
-            key_label = id(target_callable)
-
-        if sync:
-            if key_label in self._sync_handlers:
-                return  # do not allow duplicate connections
-
-            def handler(event, _fn=target_callable):
-                _fn(event)
-
-            # Store the actual emitter reference
-            self._sync_handlers[key_label] = (source_emitter, handler)
-            self._connect(source_emitter, handler)
-        else:
-            if key_label not in self._sync_handlers:
-                return
-
-            emitter, handler = self._sync_handlers.pop(key_label)
-            self._disconnect(emitter, handler)
+        # Adjust dimension order for orthogonal views
+        self._set_orth_views_dims_order()
 
     def _connect(self, emitter: EventEmitter, handler: Callable) -> None:
         """Connect an event emitter to a function handler and add it to the list of
@@ -395,16 +363,7 @@ class OrthoViewWidget(QWidget):
             emitter.disconnect(handler)
             self._connections.remove((emitter, handler))
 
-    def cleanup(self) -> None:
-        """Disconnect from all signals and clear the list"""
-
-        for sig, handler in self._connections:
-            with contextlib.suppress(ValueError):
-                sig.disconnect(handler)
-
-        self._connections.clear()
-
-    def set_orth_views_dims_order(self) -> None:
+    def _set_orth_views_dims_order(self) -> None:
         """The the order of the z,y,x dims in the orthogonal views, by using the
         rel_order attribute of the viewer models"""
 
@@ -460,7 +419,7 @@ class OrthoViewWidget(QWidget):
         if event.value.name not in self.vm_container.viewer_model.layers:
             self.vm_container.add_layer(event.value, event.index)
 
-        self.set_orth_views_dims_order()
+        self._set_orth_views_dims_order()
 
     def _layer_removed(self, event: Event) -> None:
         """Remove layer in all viewer models"""
@@ -468,7 +427,7 @@ class OrthoViewWidget(QWidget):
         layer_name = event.value.name
         if layer_name in self.vm_container.viewer_model.layers:
             self.vm_container.viewer_model.layers.pop(layer_name)
-        self.set_orth_views_dims_order()
+        self._set_orth_views_dims_order()
 
     def _layer_moved(self, event: Event) -> None:
         """Update order of layers in all viewer models"""
@@ -505,6 +464,60 @@ class OrthoViewWidget(QWidget):
             model.camera.center = camera_center
 
         self._block_center = False
+
+    def sync_event(
+        self,
+        source_emitter: EventEmitter,
+        target_callable: Callable,
+        sync: bool,
+        key_label: str | None = None,
+    ) -> None:
+        """
+        Connect or disconnect an event from a source emitter to a target callable.
+
+        Args:
+            source_emitter (napari EventEmitter)
+                The source event emitter (e.g., viewer.camera.events.zoom).
+            target_callable (callable)
+                Function to call when the source event fires.
+                Signature: target_callable(event)
+            sync (bool):
+                True to connect, False to disconnect.
+            key_label (str): optional name to store this connection by.
+        """
+
+        if not hasattr(self, "_sync_handlers"):
+            # maps key_label -> (emitter, handler)
+            self._sync_handlers = {}
+
+        if key_label is None:
+            key_label = id(target_callable)
+
+        if sync:
+            if key_label in self._sync_handlers:
+                return  # do not allow duplicate connections
+
+            def handler(event, _fn=target_callable):
+                _fn(event)
+
+            # Store the actual emitter reference
+            self._sync_handlers[key_label] = (source_emitter, handler)
+            self._connect(source_emitter, handler)
+        else:
+            if key_label not in self._sync_handlers:
+                return
+
+            emitter, handler = self._sync_handlers.pop(key_label)
+            self._disconnect(emitter, handler)
+
+    def cleanup(self) -> None:
+        """Disconnect from all signals and clear the list"""
+
+        for sig, handler in self._connections:
+            with contextlib.suppress(ValueError):
+                sig.disconnect(handler)
+
+        self._connections.clear()
 
 
 def check_center(model: ViewerModel, coords: list[int]) -> tuple[int, int]:

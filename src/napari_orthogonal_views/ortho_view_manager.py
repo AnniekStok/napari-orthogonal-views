@@ -6,6 +6,7 @@ from collections.abc import Callable
 import numpy as np
 from napari._vispy.utils.visual import overlay_to_visual
 from napari.components.viewer_model import ViewerModel
+from napari.layers import Layer
 from napari.utils.action_manager import action_manager
 from napari.utils.notifications import show_info, show_warning
 from napari.viewer import Viewer
@@ -34,7 +35,7 @@ overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
 def center_cross_on_mouse(
     viewer_model: ViewerModel,
 ):
-    """move the cross to the mouse position"""
+    """Center the viewer dimension step to the mouse position"""
 
     if not getattr(viewer_model, "mouse_over_canvas", True):
         show_info(
@@ -169,7 +170,7 @@ class OrthoViewManager:
         container.setLayout(container_layout)
 
         layout.insertWidget(0, container)
-        self.set_splitter_sizes(
+        self._set_splitter_sizes(
             0.01, 0.01
         )  # minimal size for right and bottom
 
@@ -213,14 +214,14 @@ class OrthoViewManager:
                     "crosshairs"
                 ].visible = state
 
-    def set_zoom_sync(self, state: bool = True):
+    def set_zoom_sync(self, state: bool = True) -> None:
         """Activate the zoom syncing in the controls widget"""
         if not self.is_shown():
             return
 
         self.main_controls_widget.controls_widget.zoom_widget.setChecked(state)
 
-    def set_center_sync(self, state: bool = True):
+    def set_center_sync(self, state: bool = True) -> None:
         """Activate the zoom syncing in the controls widget"""
         if not self.is_shown():
             return
@@ -229,14 +230,22 @@ class OrthoViewManager:
             state
         )
 
-    def register_layer_hook(self, layer_type: type, hook: Callable):
+    def register_layer_hook(self, layer_type: type, hook: Callable) -> None:
         """Register a hook to be applied to any matching layer type."""
 
         self._layer_hooks.setdefault(layer_type, []).append(hook)
 
-    def set_sync_filters(self, sync_filters: dict):
+    def set_sync_filters(
+        self, sync_filters: dict[type[Layer], dict[str, set[str] | str]]
+    ) -> None:
         """Provide a dictionary with layer types as keys and dictionaries as values:
-        {"forward_exclude": set|str, "reverse_exclude": set|str}"""
+        {
+            LayerType: {
+                "forward_exclude": set[str] | str,
+                "reverse_exclude": set[str] | str,
+            }
+        }
+        """
 
         self.sync_filters = sync_filters
 
@@ -245,7 +254,7 @@ class OrthoViewManager:
 
         return self._shown
 
-    def set_show_orth_views(self, show: bool):
+    def set_show_orth_views(self, show: bool) -> None:
         """Show or hide ortho views."""
 
         if show:
@@ -302,7 +311,7 @@ class OrthoViewManager:
         )
 
         # assign 30% of window width and height to orth views
-        self.set_splitter_sizes(0.3, 0.3)
+        self._set_splitter_sizes(0.3, 0.3)
 
         self._shown = True
 
@@ -347,7 +356,7 @@ class OrthoViewManager:
 
         # Removes controls and resize widgets.
         self.main_controls_widget.remove_controls()
-        self.set_splitter_sizes(
+        self._set_splitter_sizes(
             0.01, 0.01
         )  # minimal size for right and bottom
 
@@ -356,7 +365,9 @@ class OrthoViewManager:
 
         self._shown = False
 
-    def set_splitter_sizes(self, side_fraction: float, bottom_fraction: float):
+    def _set_splitter_sizes(
+        self, side_fraction: float, bottom_fraction: float
+    ) -> None:
         """Adjust the size of the right and bottom part of the splitters."""
 
         central = self._central
@@ -374,7 +385,7 @@ class OrthoViewManager:
             [central_height - bottom_height, bottom_height]
         )
 
-    def cleanup(self):
+    def cleanup(self) -> None:
         """Restore original layout and free all widgets."""
 
         # first hide to cleanup all connections
