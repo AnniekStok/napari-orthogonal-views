@@ -548,7 +548,8 @@ def check_center(model: ViewerModel, coords: list[int]) -> tuple[int, int]:
     max_w = center[-1] + (w / 2)
 
     order = model.dims.order
-    coords_reordered = [coords[i] for i in order]
+    step = [model.dims.range[r].step for r in range(len(order))]
+    coords_reordered = [coords[i] * step[i] for i in order]
 
     y_in_view = coords_reordered[-2] > min_h and coords_reordered[-2] < max_h
     x_in_view = coords_reordered[-1] > min_w and coords_reordered[-1] < max_w
