@@ -443,19 +443,36 @@ class OrthoViewWidget(QWidget):
         self.vm_container.viewer_model.layers.move(event.index, dest_index)
 
     def _update_current_step(self, event: Event) -> None:
-        """Sync the current step between different viewer models"""
+        """Sync the current step between different viewer models.
+
+        We sync using world coordinates (dims.point) rather than step indices
+        (current_step) because each viewer model may have different dims.range
+        values due to different layer scales or orientations. Syncing step
+        indices directly would result in incorrect world positions.
+        """
 
         if self._block_center:
             return
 
         self._block_center = True
+
+        # Convert source step indices to world coordinates
+        source = event.source
+        world_coords = tuple(
+            source.range[i].start + event.value[i] * source.range[i].step
+            for i in range(len(event.value))
+        )
+
         for model in [
             self.viewer,
             self.vm_container.viewer_model,
         ]:
             if model.dims.order is event.source.order:
                 continue
-            model.dims.current_step = event.value
+
+            # Set world coordinates - napari will convert to appropriate steps
+            # for this model's dims.range
+            model.dims.point = world_coords
 
             # check if the camera center is in the field of view, if not, adjust
             camera_center = list(model.camera.center)
