@@ -8,6 +8,7 @@ from napari._vispy.utils.visual import overlay_to_visual
 from napari.components.viewer_model import ViewerModel
 from napari.layers import Layer
 from napari.utils.action_manager import action_manager
+from napari.utils.io import imsave
 from napari.utils.notifications import show_info, show_warning
 from napari.viewer import Viewer
 from qtpy.QtCore import Qt, QTimer
@@ -384,6 +385,30 @@ class OrthoViewManager:
         self.v_splitter.setSizes(
             [central_height - bottom_height, bottom_height]
         )
+
+    def screenshot(self, path: str | None = None) -> np.ndarray:
+        """Create a combined screenshot of all viewers"""
+
+        main = self.viewer.screenshot()
+        right = self.right_widget.qt_viewer.screenshot()
+        bottom = self.bottom_widget.qt_viewer.screenshot()
+
+        height = main.shape[0] + bottom.shape[0]
+        width = main.shape[1] + right.shape[1]
+
+        # crop to main view in case bottom or right are one pixel too high/wide
+        bottom = bottom[:, 0 : main.shape[1], :]
+        right = right[0 : main.shape[0], :, :]
+
+        combined = np.zeros((height, width, 4), dtype=np.uint8)
+        combined[0 : main.shape[0], 0 : main.shape[1], :] = main
+        combined[main.shape[0] : height, 0 : main.shape[1], :] = bottom
+        combined[0 : main.shape[0], main.shape[1] : width, :] = right
+
+        if path is not None:
+            imsave(path, combined)
+
+        return combined
 
     def cleanup(self) -> None:
         """Restore original layout and free all widgets."""
