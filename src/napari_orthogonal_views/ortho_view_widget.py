@@ -93,12 +93,12 @@ class ViewerModelContainer:
         self.sync_filters = sync_filters or {}
 
         # Add crosshair overlays (initially invisible)
-        cursor_overlay = CrosshairOverlay(
+        self.cursor_overlay = CrosshairOverlay(
             blending="translucent_no_depth", axis_order=self.rel_order
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.viewer_model._overlays["crosshairs"] = cursor_overlay
+            self.viewer_model._overlays["crosshairs"] = self.cursor_overlay
 
     def _sync_layer_properties(
         self, orig_layer: Layer, copied_layer: Layer
@@ -288,6 +288,7 @@ class OrthoViewWidget(QWidget):
         self.viewer.axes.events.visible.connect(
             self._set_orth_views_dims_order
         )
+        self.order = order
         if sync_axes is None:
             sync_axes = [0]
         self.sync_axes = sync_axes
@@ -372,6 +373,7 @@ class OrthoViewWidget(QWidget):
 
         # TODO: allow the user to provide the dimension order and names.
         axis_labels = (
+            "c",
             "t",
             "z",
             "y",
@@ -389,12 +391,12 @@ class OrthoViewWidget(QWidget):
             )
             self.vm_container.viewer_model.dims.order = m_order
 
-        if len(order) == 3:  # assume we have zyx axes
-            self.viewer.dims.axis_labels = axis_labels[1:]
-            self.vm_container.viewer_model.dims.axis_labels = axis_labels[1:]
-        elif len(order) == 4:  # assume we have tzyx axes
-            self.viewer.dims.axis_labels = axis_labels
-            self.vm_container.viewer_model.dims.axis_labels = axis_labels
+        self.viewer.dims.axis_labels = axis_labels[
+            len(axis_labels) - len(order) :
+        ]
+        self.vm_container.viewer_model.dims.axis_labels = axis_labels[
+            len(axis_labels) - len(order) :
+        ]
 
         # whether or not the axis should be visible
         self.vm_container.viewer_model.axes.visible = self.viewer.axes.visible

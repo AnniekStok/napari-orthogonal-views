@@ -23,16 +23,20 @@ class Crosshairs(Line):
 
     _base_colors = np.array(
         [
-            [1, 1, 0, 1],  # yellow (Z)
-            [1, 1, 0, 1],
-            [1, 0, 1, 1],  # magenta (Y)
-            [1, 0, 1, 1],
             [0, 1, 1, 1],  # cyan (X)
             [0, 1, 1, 1],
+            [1, 0, 1, 1],  # magenta (Y)
+            [1, 0, 1, 1],
+            [1, 1, 0, 1],  # yellow (Z)
+            [1, 1, 0, 1],
+            [1, 0, 0, 1],  # red (T)
+            [1, 0, 0, 1],
+            [0, 1, 0, 1],  # green (C)
+            [0, 1, 0, 1],
         ]
     )
 
-    def __init__(self, axis_order: tuple[int] = (0, 1, 2)):
+    def __init__(self, axis_order: tuple[int] = (-3, -2, -1)):
         axis_order = list(axis_order)
         axis_order[1], axis_order[2] = (
             axis_order[2],
@@ -51,10 +55,11 @@ class Crosshairs(Line):
     def _reorder_colors(self) -> None:
         """Return colors permuted to match viewer axis order."""
 
-        pairs = [(0, 1), (2, 3), (4, 5)]
+        pairs = [(-1, -2), (-3, -4), (-5, -6), (-7, -8), (-9, -10)]
         new_order = [
             i for pair in [pairs[i] for i in self.axis_order] for i in pair
         ]
+
         return self._base_colors[new_order]
 
     def set_position(self, value: np.ndarray) -> None:
@@ -74,6 +79,12 @@ class CrosshairOverlay(SceneOverlay):
         super().__init__(**kwargs)
         object.__setattr__(self, "axis_order", tuple(axis_order))
 
+    def __setattr__(self, name: str, value: tuple[int]) -> None:
+        """Update the axis order attribute and emit event signal."""
+        super().__setattr__(name, value)
+        if name == "axis_order":
+            self.events.axis_order()
+
 
 class VispyCrosshairOverlay(ViewerOverlayMixin, VispySceneOverlay):
     """Overlay indicating the position of the crosshair in the world."""
@@ -92,7 +103,22 @@ class VispyCrosshairOverlay(ViewerOverlayMixin, VispySceneOverlay):
         )
         self.viewer = viewer
         self.viewer.dims.events.current_step.connect(self._move_crosshairs)
+        self.overlay = overlay
+        self.overlay.events.axis_order.connect(self._on_axis_order_change)
         super().reset()  # reset to make sure the overlay is not visible too early
+
+    def _on_axis_order_change(self, event=None):
+        """Update the colors of the crosshairs when overlay axis order changes."""
+
+        axis_order = list(self.overlay.axis_order)
+        axis_order[1], axis_order[2] = (
+            axis_order[2],
+            axis_order[1],
+        )  # swap because cross-hairs should move along their axis, not point along it.
+
+        self.node.axis_order = axis_order
+        self.node._colors = self.node._reorder_colors()
+        self._move_crosshairs()  # to refresh
 
     def _move_crosshairs(self) -> None:
         """Move the crosshairs to the current viewer step."""

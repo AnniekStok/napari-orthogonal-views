@@ -95,12 +95,12 @@ class OrthoViewManager:
         init_actions()
 
         # Add crosshairs overlay to main viewer
-        cursor_overlay = CrosshairOverlay(
-            blending="translucent_no_depth", axis_order=(0, 1, 2)
+        self.cursor_overlay = CrosshairOverlay(
+            blending="translucent_no_depth", axis_order=(-3, -2, -1)
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.viewer._overlays["crosshairs"] = cursor_overlay
+            self.viewer._overlays["crosshairs"] = self.cursor_overlay
 
         # make sure the viewer activates on hover
         with warnings.catch_warnings():
@@ -303,6 +303,9 @@ class OrthoViewManager:
         self.bottom_widget = new_bottom
         old_bottom.deleteLater()
 
+        # Connect to signals that update the dims order in the main viewer
+        self.viewer.dims.events.order.connect(self.update_dims_order)
+
         # Add controls to main_controls widget
         self.main_controls_widget.add_controls(
             widgets=[self.right_widget, self.bottom_widget]
@@ -330,6 +333,8 @@ class OrthoViewManager:
         self.main_controls_widget.show_checkbox.blockSignals(True)
         self.main_controls_widget.show_checkbox.setChecked(False)
         self.main_controls_widget.show_checkbox.blockSignals(False)
+
+        self.viewer.dims.events.order.disconnect(self.update_dims_order)
 
         if not self._shown:
             return
@@ -365,6 +370,71 @@ class OrthoViewManager:
         self.viewer.axes.visible = False
 
         self._shown = False
+
+    def update_dims_order(self):
+        """When the dimension order is updated in the main viewer, also update the dim
+        order in the orthogonal views. If there are more than 3 dimensions, the extra
+        dimensions are kept in the same order, and the remaining dimensions are reordered
+        according to the orthoviews' order: (-1, -2, -3) for right, and (-2, -3, -1) for
+        bottom. Also trigger update of the crosshairs axis order, to keep the crosshair
+        colors in sync."""
+
+        # update the colors of cross hairs in the main viewer.
+        view_order = list(self.viewer.dims.order)
+        ndim = len(view_order)
+        view_order = [r - ndim for r in view_order]
+        self.cursor_overlay.axis_order = tuple(view_order[-3:])
+
+        # update the dimension order in the orthoviews
+        if len(self.viewer.dims.order) > 3:
+            # fill up with extra dims
+            new_order = list(self.viewer.dims.order[:-3])
+        else:
+            new_order = []
+
+        remaining_dims = [
+            d for d in self.viewer.dims.order if d not in new_order
+        ]
+
+        if self.right_widget is not None:
+            right_order = self.right_widget.order
+
+            new_right_order = new_order + [
+                remaining_dims[right_order[0]],
+                remaining_dims[right_order[1]],
+                remaining_dims[right_order[2]],
+            ]
+
+            self.right_widget.qt_viewer.dims.dims.order = new_right_order
+
+            # Update crosshairs for right widget by changing the model's axis_order
+            # The VispyCrosshairOverlay listens to these changes and will respond by
+            # updating the colors.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                # use inverse numbering
+                ndim = len(new_right_order)
+                new_right_order = [r - ndim for r in new_right_order]
+                self.right_widget.vm_container.cursor_overlay.axis_order = (
+                    tuple(new_right_order[-3:])
+                )
+
+            bottom_order = self.bottom_widget.order
+            new_bottom_order = new_order + [
+                remaining_dims[bottom_order[0]],
+                remaining_dims[bottom_order[1]],
+                remaining_dims[bottom_order[2]],
+            ]
+
+            self.bottom_widget.qt_viewer.dims.dims.order = new_bottom_order
+
+            # Update crosshairs for bottom widget by changing the model's axis_order
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                new_bottom_order = [r - ndim for r in new_bottom_order]
+                self.bottom_widget.vm_container.cursor_overlay.axis_order = (
+                    tuple(new_bottom_order[-3:])
+                )
 
     def _set_splitter_sizes(
         self, side_fraction: float, bottom_fraction: float
