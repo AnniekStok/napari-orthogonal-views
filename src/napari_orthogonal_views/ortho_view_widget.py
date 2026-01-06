@@ -83,9 +83,8 @@ class ViewerModelContainer:
     A container that holds a ViewerModel and manages synchronization.
     """
 
-    def __init__(self, title: str, rel_order: tuple[int], sync_filters=None):
+    def __init__(self, title: str, order: tuple[int], sync_filters=None):
         self.title = title
-        self.rel_order = rel_order
         self.viewer_model = ViewerModel(title)
         self.viewer_model.axes.visible = True
         self._block = False
@@ -94,7 +93,7 @@ class ViewerModelContainer:
 
         # Add crosshair overlays (initially invisible)
         self.cursor_overlay = CrosshairOverlay(
-            blending="translucent_no_depth", axis_order=self.rel_order
+            blending="translucent_no_depth", axis_order=order
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -298,7 +297,7 @@ class OrthoViewWidget(QWidget):
 
         # create container to store viewer model in
         self.vm_container = ViewerModelContainer(
-            title="orthogonal view", rel_order=order, sync_filters=sync_filters
+            title="orthogonal view", order=order, sync_filters=sync_filters
         )
 
         # Add optional layer hooks
@@ -368,8 +367,8 @@ class OrthoViewWidget(QWidget):
             self._connections.remove((emitter, handler))
 
     def _set_orth_views_dims_order(self) -> None:
-        """The the order of the z,y,x dims in the orthogonal views, by using the
-        rel_order attribute of the viewer models"""
+        """Set the order of the c, t, z, y, x dims in the orthogonal views, using the
+        axis order attribute."""
 
         # TODO: allow the user to provide the dimension order and names.
         axis_labels = (
@@ -385,9 +384,9 @@ class OrthoViewWidget(QWidget):
             # model axis order (e.g. xz view)
             m_order = list(order)
             m_order[-3:] = (
-                m_order[self.vm_container.rel_order[0]],
-                m_order[self.vm_container.rel_order[1]],
-                m_order[self.vm_container.rel_order[2]],
+                m_order[self.order[0]],
+                m_order[self.order[1]],
+                m_order[self.order[2]],
             )
             self.vm_container.viewer_model.dims.order = m_order
 

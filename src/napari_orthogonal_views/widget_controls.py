@@ -186,7 +186,7 @@ class CenterWidget(QCheckBox):
                 # Align camera centers immediately
                 viewer_center = list(widget.viewer.camera.center)
                 viewer_center_reordered = [
-                    viewer_center[i] for i in widget.vm_container.rel_order
+                    viewer_center[i] for i in widget.order
                 ]
                 widget_center = list(
                     widget.vm_container.viewer_model.camera.center

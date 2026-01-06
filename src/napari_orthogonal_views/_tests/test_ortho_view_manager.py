@@ -1,3 +1,4 @@
+import numpy as np
 from qtpy.QtWidgets import QWidget
 
 from napari_orthogonal_views.ortho_view_manager import (
@@ -49,5 +50,52 @@ def test_sync_camera(make_napari_viewer, qtbot):
     assert any(em == center_emitter for em, _ in w._connections)
     m.set_center_sync(False)
     assert not any(em == center_emitter for em, _ in w._connections)
+
+    m.cleanup()
+
+
+def test_update_dims_order_with_4d_data(make_napari_viewer, qtbot):
+    """Test that update_dims_order correctly updates dimension order and crosshair order."""
+
+    # Create viewer with 4D data (T, Z, Y, X)
+    viewer = make_napari_viewer()
+    data = np.random.rand(3, 10, 32, 32)  # T, Z, Y, X
+    viewer.add_image(data, name="4D_data")
+
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    assert isinstance(m.right_widget, OrthoViewWidget)
+    assert isinstance(m.bottom_widget, OrthoViewWidget)
+
+    # Initially, dims.order should be (0, 1, 2, 3) for T, Z, Y, X
+    assert viewer.dims.order == (0, 1, 2, 3)
+
+    # Check initial axis orders (last 3 dims in inverse notation)
+    # For main viewer: (0, 1, 2, 3) -> (-4, -3, -2, -1) -> last 3: (-3, -2, -1)
+    assert m.cursor_overlay.axis_order == (-3, -2, -1)
+
+    # Test changing dimension order in the main viewer
+    # Reorder to (1, 0, 2, 3) - swap T and Z
+    viewer.dims.order = (1, 0, 2, 3)
+    qtbot.wait(100)  # Allow time for event to propagate
+
+    # After reordering, update_dims_order should have been called
+    # view_order = [1, 0, 2, 3] -> in relative notation: [-3, -4, -2, -1]
+    # last 3 are [-4, -2, -1]
+    expected_axis_order = (-4, -2, -1)
+    assert m.cursor_overlay.axis_order == expected_axis_order
+
+    # Verify the right and bottom widget's crosshair axis order was updated
+    right_axis_order = m.right_widget.vm_container.cursor_overlay.axis_order
+    assert right_axis_order == (-1, -2, -4)
+    bottom_axis_order = m.bottom_widget.vm_container.cursor_overlay.axis_order
+    assert bottom_axis_order == (-2, -4, -1)
+
+    # Verify that dimension orders in orthogonal views are updated
+    # Right widget uses order (-1, -2, -3), bottom uses (-2, -3, -1)
+    assert m.right_widget.qt_viewer.dims.dims.order == (1, 3, 2, 0)
+    assert m.bottom_widget.qt_viewer.dims.dims.order == (1, 2, 0, 3)
 
     m.cleanup()
