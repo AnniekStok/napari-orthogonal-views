@@ -32,6 +32,7 @@ dependencies = [
     "napari>=0.5,<1",
     "numpy",
     "qtpy",
+    "opencv-python",
 ]
 
 [project.urls]

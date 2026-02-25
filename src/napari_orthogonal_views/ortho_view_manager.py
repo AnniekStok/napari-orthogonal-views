@@ -3,7 +3,9 @@ import warnings
 import weakref
 from collections.abc import Callable
 
+import cv2
 import numpy as np
+import tqdm
 from napari._vispy.utils.visual import overlay_to_visual
 from napari.components.viewer_model import ViewerModel
 from napari.layers import Layer
@@ -16,6 +18,7 @@ from qtpy.QtWidgets import (
     QLayout,
     QSizePolicy,
     QSplitter,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -28,6 +31,7 @@ from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
     activate_on_hover,
 )
+from napari_orthogonal_views.screen_recorder_widget import ScreenRecorderWidget
 from napari_orthogonal_views.widget_controls import MainControlsWidget
 
 overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
@@ -131,10 +135,18 @@ class OrthoViewManager:
         self.right_widget = QWidget()  # empty widget placeholder
         self.bottom_widget = QWidget()  # empty widget placeholder
 
+        controls_tab = QTabWidget()
         self.main_controls_widget = MainControlsWidget()
         self.main_controls_widget.show_orth_views.connect(
             self.set_show_orth_views
         )
+        controls_tab.addTab(self.main_controls_widget, "Controls")
+
+        self.screen_recorder_widget = ScreenRecorderWidget(
+            screenshot_callback=self.screenshot,
+            screenrecord_callback=self.screen_record,
+        )
+        controls_tab.addTab(self.screen_recorder_widget, "Screen Recorder")
 
         # Build orthogonal layout (splitters + widgets)
         self.h_splitter_top = QSplitter(Qt.Horizontal)
@@ -143,7 +155,7 @@ class OrthoViewManager:
 
         self.h_splitter_bottom = QSplitter(Qt.Horizontal)
         self.h_splitter_bottom.addWidget(self.bottom_widget)
-        self.h_splitter_bottom.addWidget(self.main_controls_widget)
+        self.h_splitter_bottom.addWidget(controls_tab)
 
         self.v_splitter = QSplitter(Qt.Vertical)
         self.v_splitter.addWidget(self.h_splitter_top)
@@ -197,6 +209,18 @@ class OrthoViewManager:
         self.main_controls_widget.controls_widget.cross_widget.setChecked(
             state
         )
+
+    def set_axes(self, state: bool = True) -> None:
+        """Activate/deactivate the checkbox to set the axes visibility."""
+
+        if not self.is_shown():
+            return
+        self.main_controls_widget.controls_widget.show_axes.setChecked(state)
+
+    def show_axes(self, state: int) -> None:
+        """Show or hide the axes in the main viewer based on the checkbox state."""
+        state = state == 2
+        self.viewer.axes.visible = state
 
     def show_cross_hairs(self, state: int) -> None:
         """Show or hide the crosshairs overlay on all viewers"""
@@ -305,6 +329,7 @@ class OrthoViewManager:
 
         # Connect to signals that update the dims order in the main viewer
         self.viewer.dims.events.order.connect(self.update_dims_order)
+        self.viewer.dims.events.ndim.connect(self.update_screen_recorder_axes)
 
         # Add controls to main_controls widget
         self.main_controls_widget.add_controls(
@@ -312,6 +337,9 @@ class OrthoViewManager:
         )
         self.main_controls_widget.controls_widget.cross_widget.stateChanged.connect(
             self.show_cross_hairs
+        )
+        self.main_controls_widget.controls_widget.show_axes.stateChanged.connect(
+            self.show_axes
         )
 
         # assign 30% of window width and height to orth views
@@ -335,6 +363,9 @@ class OrthoViewManager:
         self.main_controls_widget.show_checkbox.blockSignals(False)
 
         self.viewer.dims.events.order.disconnect(self.update_dims_order)
+        self.viewer.dims.events.ndim.disconnect(
+            self.update_screen_recorder_axes
+        )
 
         if not self._shown:
             return
@@ -370,6 +401,18 @@ class OrthoViewManager:
         self.viewer.axes.visible = False
 
         self._shown = False
+
+    def update_screen_recorder_axes(self):
+        """When the number of dimensions is updated in the main viewer, also update the
+        screen recorder widget's moving axis options"""
+
+        ndim = self.viewer.dims.ndim
+        moving_axis_options = [str(d) for d in range(ndim)]
+        if self.screen_recorder_widget is not None:
+            self.screen_recorder_widget.moving_axis.clear()
+            self.screen_recorder_widget.moving_axis.addItems(
+                moving_axis_options
+            )
 
     def update_dims_order(self):
         """When the dimension order is updated in the main viewer, also update the dim
@@ -456,29 +499,135 @@ class OrthoViewManager:
             [central_height - bottom_height, bottom_height]
         )
 
-    def screenshot(self, path: str | None = None) -> np.ndarray:
-        """Create a combined screenshot of all viewers"""
+    def screenshot(
+        self,
+        path: str | None = None,
+        include_right: bool = True,
+        include_bottom: bool = True,
+    ) -> np.ndarray:
+        """Create a screenshot with the main viewer and optionally one or both ortho views.
+        Args:
+            path (str), optional: if provided, the screenshot will be saved to this path
+            include_right (bool): whether to include the right orthogonal view in the screenshot
+            include_bottom (bool): whether to include the bottom orthogonal view in the screenshot
+
+        Returns:
+            np.ndarray: the combined screenshot as a numpy array
+        """
 
         main = self.viewer.screenshot()
-        right = self.right_widget.qt_viewer.screenshot()
-        bottom = self.bottom_widget.qt_viewer.screenshot()
+        right = (
+            self.right_widget.qt_viewer.screenshot() if include_right else None
+        )
+        bottom = (
+            self.bottom_widget.qt_viewer.screenshot()
+            if include_bottom
+            else None
+        )
 
-        height = main.shape[0] + bottom.shape[0]
-        width = main.shape[1] + right.shape[1]
+        height = main.shape[0] + (bottom.shape[0] if include_bottom else 0)
+        width = main.shape[1] + (right.shape[1] if include_right else 0)
 
         # crop to main view in case bottom or right are one pixel too high/wide
-        bottom = bottom[:, 0 : main.shape[1], :]
-        right = right[0 : main.shape[0], :, :]
+        if include_bottom:
+            bottom = bottom[:, 0 : main.shape[1], :]
+        if include_right:
+            right = right[0 : main.shape[0], :, :]
 
         combined = np.zeros((height, width, 4), dtype=np.uint8)
         combined[0 : main.shape[0], 0 : main.shape[1], :] = main
-        combined[main.shape[0] : height, 0 : main.shape[1], :] = bottom
-        combined[0 : main.shape[0], main.shape[1] : width, :] = right
+        if include_bottom:
+            combined[main.shape[0] : height, 0 : main.shape[1], :] = bottom
+        if include_right:
+            combined[0 : main.shape[0], main.shape[1] : width, :] = right
 
         if path is not None:
             imsave(path, combined)
 
         return combined
+
+    def screen_record(
+        self,
+        path: str = "recording.avi",
+        incl_right: bool = True,
+        incl_bottom: bool = True,
+        axis: int = 0,
+        fps: int = 7,
+        incl_timestamp: bool = False,
+        step=1,
+        suffix: str = "hrs",
+    ) -> None:
+        """Move through a given axis viewer and collect screen shots to create a video.
+
+        Args:
+            path (str): output path for the video
+            incl_right (bool): whether to include the right orthogonal view in the recording
+            incl_bottom (bool): whether to include the bottom orthogonal view in the recording
+            axis (int): the axis along which to move for recording
+            fps (int): frames per second for the output video
+            incl_timestamp (bool): whether to include a timestamp in the video
+            step (int): the step size to move along the axis for each frame
+            suffix (str): the suffix to use for the timestamp
+        """
+
+        n_frames = int(self.viewer.dims.range[axis][1])
+        current_step = self.viewer.dims.current_step
+        imgs = []
+        for i in tqdm.tqdm(range(n_frames)):
+            new_step = list(current_step)
+            new_step[axis] = i
+            self.viewer.dims.current_step = new_step
+            img = self.screenshot(
+                path=None, include_right=incl_right, include_bottom=incl_bottom
+            )
+            imgs.append(img)
+
+        self.write_avi(imgs, path, fps, incl_timestamp, step, suffix)
+
+    def write_avi(
+        self,
+        imgs: list[np.ndarray],
+        out_path: str,
+        fps: int = 7,
+        incl_timestamp: bool = False,
+        step=1,
+        suffix: str = "hrs",
+    ) -> None:
+        """Write images to avi with an optional time stamp.
+
+        Args:
+            imgs (list[np.ndarray]): list of images to write to video
+            out_path (str): output path for the video
+            fps (int): frames per second for the output video
+            incl_timestamp (bool): whether to include a timestamp in the video
+            step (int): the step size to move along the axis for each frame, used for calculating the timestamp
+            suffix (str): the suffix to use for the timestamp
+        """
+
+        height, width, _ = imgs[0].shape
+
+        # Video writer (MJPG → AVI)
+        fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+        out = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
+
+        for i, img in enumerate(imgs):
+            # Draw timestamp in top-left
+            img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+            if incl_timestamp:
+                timestamp = f"{i*step:.2f} {suffix}"
+                cv2.putText(
+                    img,
+                    timestamp,
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (255, 255, 255),
+                    2,
+                )
+            out.write(img)
+
+        out.release()
+        print("Saved:", out_path)
 
     def cleanup(self) -> None:
         """Restore original layout and free all widgets."""
@@ -509,6 +658,7 @@ class OrthoViewManager:
             self.right_widget,
             self.bottom_widget,
             self.main_controls_widget,
+            self.screen_recorder_widget,
             getattr(self, "h_splitter_top", None),
             getattr(self, "h_splitter_bottom", None),
             getattr(self, "v_splitter", None),
