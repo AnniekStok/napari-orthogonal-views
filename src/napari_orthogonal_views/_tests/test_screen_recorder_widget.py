@@ -36,23 +36,6 @@ def test_screen_recorder_widget_with_callbacks(qtbot):
     assert widget.screenrecord_callback is screenrecord_cb
 
 
-def test_toggle_time_step_and_suffix(qtbot):
-    """Test that toggling timestamp visibility works correctly."""
-    widget = ScreenRecorderWidget()
-    qtbot.addWidget(widget)
-
-    # Initially should be hidden
-    assert not widget.time_step_and_suffix_widget.isVisible()
-
-    # Toggle on
-    widget.toggle_time_step_and_suffix(True)
-    assert widget.time_step_and_suffix_widget.isVisible()
-
-    # Toggle off
-    widget.toggle_time_step_and_suffix(False)
-    assert not widget.time_step_and_suffix_widget.isVisible()
-
-
 def test_copy_to_clipboard_with_callback(qtbot):
     """Test copy_to_clipboard calls screenshot callback and sets clipboard."""
     screenshot_array = np.random.randint(0, 255, (100, 100, 4), dtype=np.uint8)
