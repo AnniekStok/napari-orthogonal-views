@@ -41,7 +41,7 @@ This plugin is not discoverable as a widget, but commands are available in Views
   - Toggle Orthogonal Views
   - Remove Orthogonal Views
 
-Once shown, it can also be popped up or collapsed using the checkbox in the bottom right corner 'Show orthogonal views'. 
+Once shown, it can also be popped up or collapsed using the checkbox in the bottom right corner 'Show orthogonal views'.
 Alternatively, you can show the orthogonal views via the console:
 
 ```
@@ -59,14 +59,14 @@ Out[6]: True
 ```
 
 The size of the orthogonal view windows can be adjusted by clicking and dragging the small dot in between the views, optionally one or two views can be hidden entirely. The checkboxes in the bottom right corner can be used to show the crosshair overlay or for more control over camera zoom and axis center syncing.
-Pressing `T` on the keyboard will center all views to the current mouse location. 
+Pressing `T` on the keyboard will center all views to the current mouse location.
 
-By default, all events (including label editing such as painting) are synced across all views. The different views share the same underlying data array and undo/redo history. 
+By default, all events (including label editing such as painting) are synced across all views. The different views share the same underlying data array and undo/redo history.
 
 ## Syncing properties
-By default, all layer properties should be synced between the layer on the main viewer and the orthoviews. However, it is possible to have more finegrained control over the synced properties via the `set_sync_filters` function, as long as it is specified *before* the orthogonal views are activated. 
+By default, all layer properties should be synced between the layer on the main viewer and the orthoviews. However, it is possible to have more finegrained control over the synced properties via the `set_sync_filters` function, as long as it is specified *before* the orthogonal views are activated.
 
-For example, to disable syncing of all properties on Tracks layers and specifically the contour property on Labels layers: 
+For example, to disable syncing of all properties on Tracks layers and specifically the contour property on Labels layers:
 
 ```
 from napari_orthogonal_views.ortho_view_manager import _get_manager
@@ -84,7 +84,10 @@ sync_filters = {
 m.set_sync_filters(sync_filters)
 
 ```
-Then add 3D data (e.g. File > Open Sample > napari builtins > Balls (3D)). Activate the labels layer and change the contour value. You should see that the contour property is not synced from main viewer to orthoviews now. 
+Then add 3D data (e.g. File > Open Sample > napari builtins > Balls (3D)). Activate the labels layer and change the contour value. You should see that the contour property is not synced from main viewer to orthoviews now.
+
+## Screen recording
+The 'Screen recording' tab offers a quick way to save a stitched image of the viewer with its orthogonal views. It is also possible to slide along a given axis and record a movie that is saved as a .avi file.
 
 ## Known issues and ongoing work
 - Deprecation warnings on `Window._qt_window`, `LayerList._get_step_size`, `LayerList._get_extent_world` (suppressed for now).
