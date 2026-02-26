@@ -122,6 +122,7 @@ class ScreenRecorderWidget(QWidget):
         scroll_area.setWidgetResizable(True)
         scroll_area.setWidget(widget)
         scroll_layout = QVBoxLayout()
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
         scroll_layout.addWidget(scroll_area)
         self.setLayout(scroll_layout)
 
