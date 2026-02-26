@@ -1,3 +1,6 @@
+import os
+import tempfile
+
 import numpy as np
 from qtpy.QtWidgets import QWidget
 
@@ -97,5 +100,148 @@ def test_update_dims_order_with_4d_data(make_napari_viewer, qtbot):
     # Right widget uses order (-1, -2, -3), bottom uses (-2, -3, -1)
     assert m.right_widget.qt_viewer.dims.dims.order == (1, 3, 2, 0)
     assert m.bottom_widget.qt_viewer.dims.dims.order == (1, 2, 0, 3)
+
+    m.cleanup()
+
+
+def test_screenshot_main_view_only(make_napari_viewer, qtbot):
+    """Test screenshot with only the main view."""
+    viewer = make_napari_viewer()
+    data = np.random.rand(32, 32, 32)
+    viewer.add_image(data, name="test_data")
+
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    # Get screenshot with only main view
+    screenshot = m.screenshot(include_right=False, include_bottom=False)
+
+    # Should be 2D array with RGBA channels
+    assert screenshot.ndim == 3
+    assert screenshot.shape[2] == 4
+    assert screenshot.dtype == np.uint8
+    # Height and width should match main viewer
+    assert screenshot.shape[0] > 0
+    assert screenshot.shape[1] > 0
+
+    m.cleanup()
+
+
+def test_screenshot_with_all_views(make_napari_viewer, qtbot):
+    """Test screenshot with main, right, and bottom views."""
+    viewer = make_napari_viewer()
+    data = np.random.rand(32, 32, 32)
+    viewer.add_image(data, name="test_data")
+
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    # Get screenshot with all views
+    screenshot = m.screenshot(include_right=True, include_bottom=True)
+
+    assert screenshot.ndim == 3
+    assert screenshot.shape[2] == 4
+    assert screenshot.dtype == np.uint8
+    # Should be larger than main view alone
+    assert screenshot.shape[0] > 0
+    assert screenshot.shape[1] > 0
+
+    m.cleanup()
+
+
+def test_screenshot_save_to_file(make_napari_viewer, qtbot):
+    """Test saving screenshot to a file."""
+    viewer = make_napari_viewer()
+    data = np.random.rand(32, 32, 32)
+    viewer.add_image(data, name="test_data")
+
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    # Save screenshot to temporary file
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = os.path.join(tmpdir, "test_screenshot.png")
+        screenshot = m.screenshot(
+            path=filepath, include_right=False, include_bottom=False
+        )
+
+        # Check that file was created
+        assert os.path.exists(filepath)
+        assert os.path.getsize(filepath) > 0
+
+        # Check that returned array matches what would be saved
+        assert screenshot.ndim == 3
+        assert screenshot.shape[2] == 4
+
+    m.cleanup()
+
+
+def test_screenshot_with_different_view_combinations(
+    make_napari_viewer, qtbot
+):
+    """Test screenshot with different combinations of views."""
+    viewer = make_napari_viewer()
+    data = np.random.rand(32, 32, 32)
+    viewer.add_image(data, name="test_data")
+
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    # Get screenshots with different view combinations
+    main_only = m.screenshot(include_right=False, include_bottom=False)
+    with_right = m.screenshot(include_right=True, include_bottom=False)
+    with_bottom = m.screenshot(include_right=False, include_bottom=True)
+    with_both = m.screenshot(include_right=True, include_bottom=True)
+
+    # All should be valid
+    for screenshot in [main_only, with_right, with_bottom, with_both]:
+        assert screenshot.ndim == 3
+        assert screenshot.shape[2] == 4
+        assert screenshot.dtype == np.uint8
+
+    # Incrementally larger screenshots
+    assert (
+        main_only.shape[0] * main_only.shape[1]
+        < with_right.shape[0] * with_right.shape[1]
+    )
+    assert (
+        main_only.shape[0] * main_only.shape[1]
+        < with_bottom.shape[0] * with_bottom.shape[1]
+    )
+    assert (
+        with_right.shape[0] * with_right.shape[1]
+        < with_both.shape[0] * with_both.shape[1]
+    )
+
+    m.cleanup()
+
+
+def test_screen_record_with_views(make_napari_viewer, qtbot):
+    """Test screen recording with multiple views included."""
+    viewer = make_napari_viewer()
+    data = np.random.rand(3, 32, 32, 32)  # T, Z, Y, X
+    viewer.add_image(data, name="test_data")
+
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = os.path.join(tmpdir, "test_recording_views.avi")
+        m.screen_record(
+            path=filepath,
+            axis=0,
+            incl_right=True,
+            incl_bottom=True,
+            fps=7,
+        )
+
+        # Check that file was created
+        assert os.path.exists(filepath)
+        assert os.path.getsize(filepath) > 0
 
     m.cleanup()

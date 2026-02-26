@@ -1,7 +1,6 @@
 from psygnal import Signal
 from qtpy.QtWidgets import (
     QCheckBox,
-    QGroupBox,
     QLabel,
     QVBoxLayout,
     QWidget,
@@ -24,17 +23,12 @@ class MainControlsWidget(QWidget):
         self.show_checkbox.stateChanged.connect(self.set_show_views)
         self.controls_widget = QWidget()
 
-        group_box = QGroupBox("Controls")
         self.main_layout = QVBoxLayout()
 
         self.main_layout.addWidget(self.show_checkbox)
         self.main_layout.addWidget(self.controls_widget)
-        group_box.setLayout(self.main_layout)
 
-        main_layout = QVBoxLayout()
-        main_layout.addWidget(group_box)
-
-        self.setLayout(main_layout)
+        self.setLayout(self.main_layout)
 
     def set_show_views(self, state: bool) -> None:
         """Emit signal to show/hide orth views"""
@@ -54,6 +48,7 @@ class MainControlsWidget(QWidget):
 
         if isinstance(self.controls_widget, ControlsWidget):
             self.controls_widget.cross_widget.setChecked(False)
+            self.controls_widget.show_axes.setChecked(False)
         old_widget = self.controls_widget
         self.controls_widget = QWidget()
         self.main_layout.replaceWidget(old_widget, self.controls_widget)
@@ -68,11 +63,14 @@ class ControlsWidget(QWidget):
         super().__init__()
 
         self.cross_widget = QCheckBox("Show cross hairs")
+        self.show_axes = QCheckBox("Show axes")
+        self.show_axes.setChecked(True)
         self.zoom_widget = ZoomWidget(widgets=widgets)
         self.center_widget = CenterWidget(widgets=widgets)
 
         layout = QVBoxLayout()
         layout.addWidget(self.cross_widget)
+        layout.addWidget(self.show_axes)
         layout.addWidget(self.zoom_widget)
         layout.addWidget(self.center_widget)
         label = QLabel("Press T to center view on mouse")
