@@ -20,7 +20,12 @@ from qtpy.QtWidgets import (
 class ScreenRecorderWidget(QWidget):
     """Widget to control screen recording of main view and orthogonal views"""
 
-    def __init__(self, screenshot_callback=None, screenrecord_callback=None):
+    def __init__(
+        self,
+        ndim: int = 3,
+        screenshot_callback=None,
+        screenrecord_callback=None,
+    ):
         super().__init__()
 
         # callbacks for screenshot and screen record functions
@@ -54,7 +59,7 @@ class ScreenRecorderWidget(QWidget):
 
         # Axis to slide along
         self.moving_axis = QComboBox()
-        self.moving_axis.addItems(["0"])
+        self.moving_axis.addItems([str(i) for i in range(ndim)])
         moving_axis_layout = QHBoxLayout()
         moving_axis_layout.addWidget(QLabel("Moving axis"))
         moving_axis_layout.addWidget(self.moving_axis)

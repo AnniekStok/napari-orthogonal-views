@@ -144,6 +144,7 @@ class OrthoViewManager:
 
         # Screen Recorder tab will be added when orthoviews are shown
         self.screen_recorder_widget = ScreenRecorderWidget(
+            ndim=self.viewer.dims.ndim,
             screenshot_callback=self.screenshot,
             screenrecord_callback=self.screen_record,
         )
@@ -347,6 +348,7 @@ class OrthoViewManager:
             self.controls_tab.addTab(
                 self.screen_recorder_widget, "Screen Recorder"
             )
+            self.update_screen_recorder_axes()
 
         # assign 30% of window width and height to orth views
         self._set_splitter_sizes(0.3, 0.3)
