@@ -135,18 +135,18 @@ class OrthoViewManager:
         self.right_widget = QWidget()  # empty widget placeholder
         self.bottom_widget = QWidget()  # empty widget placeholder
 
-        controls_tab = QTabWidget()
+        self.controls_tab = QTabWidget()
         self.main_controls_widget = MainControlsWidget()
         self.main_controls_widget.show_orth_views.connect(
             self.set_show_orth_views
         )
-        controls_tab.addTab(self.main_controls_widget, "Controls")
+        self.controls_tab.addTab(self.main_controls_widget, "Controls")
 
+        # Screen Recorder tab will be added when orthoviews are shown
         self.screen_recorder_widget = ScreenRecorderWidget(
             screenshot_callback=self.screenshot,
             screenrecord_callback=self.screen_record,
         )
-        controls_tab.addTab(self.screen_recorder_widget, "Screen Recorder")
 
         # Build orthogonal layout (splitters + widgets)
         self.h_splitter_top = QSplitter(Qt.Horizontal)
@@ -155,7 +155,7 @@ class OrthoViewManager:
 
         self.h_splitter_bottom = QSplitter(Qt.Horizontal)
         self.h_splitter_bottom.addWidget(self.bottom_widget)
-        self.h_splitter_bottom.addWidget(controls_tab)
+        self.h_splitter_bottom.addWidget(self.controls_tab)
 
         self.v_splitter = QSplitter(Qt.Vertical)
         self.v_splitter.addWidget(self.h_splitter_top)
@@ -342,6 +342,12 @@ class OrthoViewManager:
             self.show_axes
         )
 
+        # Add the screen recorder tab when showing orthoviews
+        if self.controls_tab.indexOf(self.screen_recorder_widget) == -1:
+            self.controls_tab.addTab(
+                self.screen_recorder_widget, "Screen Recorder"
+            )
+
         # assign 30% of window width and height to orth views
         self._set_splitter_sizes(0.3, 0.3)
 
@@ -396,6 +402,11 @@ class OrthoViewManager:
         self._set_splitter_sizes(
             0.01, 0.01
         )  # minimal size for right and bottom
+
+        # Remove the screen recorder tab when hiding orthoviews
+        tab_index = self.controls_tab.indexOf(self.screen_recorder_widget)
+        if tab_index != -1:
+            self.controls_tab.removeTab(tab_index)
 
         # remove axis labels
         self.viewer.axes.visible = False

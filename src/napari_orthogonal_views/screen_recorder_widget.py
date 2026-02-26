@@ -1,4 +1,3 @@
-from psygnal import Signal
 from qtpy.QtGui import QImage, QPixmap
 from qtpy.QtWidgets import (
     QApplication,
@@ -20,9 +19,6 @@ from qtpy.QtWidgets import (
 
 class ScreenRecorderWidget(QWidget):
     """Widget to control screen recording of main view and orthogonal views"""
-
-    start_recording = Signal()
-    stop_recording = Signal()
 
     def __init__(self, screenshot_callback=None, screenrecord_callback=None):
         super().__init__()
