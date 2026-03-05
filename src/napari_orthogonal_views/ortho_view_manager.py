@@ -538,14 +538,21 @@ class OrthoViewManager:
             else None
         )
 
+        # Crop to minimum width and height
+        min_height = main.shape[0]
+        min_width = main.shape[1]
+
+        if include_bottom:
+            min_width = min(min_width, bottom.shape[1])
+            bottom = bottom[:, :min_width, :]
+        if include_right:
+            min_height = min(min_height, right.shape[0])
+            right = right[:min_height, :, :]
+
+        main = main[:min_height, :min_width, :]
+
         height = main.shape[0] + (bottom.shape[0] if include_bottom else 0)
         width = main.shape[1] + (right.shape[1] if include_right else 0)
-
-        # crop to main view in case bottom or right are one pixel too high/wide
-        if include_bottom:
-            bottom = bottom[:, 0 : main.shape[1], :]
-        if include_right:
-            right = right[0 : main.shape[0], :, :]
 
         combined = np.zeros((height, width, 4), dtype=np.uint8)
         combined[0 : main.shape[0], 0 : main.shape[1], :] = main
