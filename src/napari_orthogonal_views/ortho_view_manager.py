@@ -590,7 +590,7 @@ class OrthoViewManager:
             suffix (str): the suffix to use for the timestamp
         """
 
-        n_frames = int(self.viewer.dims.range[axis][1])
+        n_frames = int(self.viewer.dims.range[axis][1]) + 1
         current_step = self.viewer.dims.current_step
         imgs = []
         for i in tqdm.tqdm(range(n_frames)):
