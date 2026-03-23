@@ -297,3 +297,32 @@ def test_layer_hook(make_napari_viewer, qtbot):
     assert viewer.layers[0].selected_label == 5
 
     m.cleanup()
+
+
+def test_crosshair_overlay_visibility(make_napari_viewer, qtbot):
+    """Regression test: setting the crosshair overlay visible must not crash with
+    TypeError when napari passes font_manager to VispyCrosshairOverlay.__init__.
+
+    napari 0.7.0 changed _add_viewer_overlay to pass font_manager to all
+    overlays. VispyCrosshairOverlay did not accept **kwargs, causing a crash
+    whenever the CrosshairOverlay's .visible was set to True (which triggers
+    lazy initialization of the vispy overlay via create_vispy_overlay).
+
+    The CrosshairOverlay lives in the ortho viewer model's _overlays, so the
+    crash is triggered by setting visible on the ortho viewer's cursor_overlay —
+    not on the main viewer, which has no CrosshairOverlay.
+    """
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    # Triggering visible=True on the ortho viewer's CrosshairOverlay causes
+    # napari 0.7.0 to call create_vispy_overlay(font_manager=...) for it,
+    # which crashes because VispyCrosshairOverlay.__init__ has no **kwargs.
+    m.right_widget.vm_container.cursor_overlay.visible = True
+    m.right_widget.vm_container.cursor_overlay.visible = False
+
+    m.cleanup()
+
+
