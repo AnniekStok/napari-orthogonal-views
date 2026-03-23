@@ -324,5 +324,3 @@ def test_crosshair_overlay_visibility(make_napari_viewer, qtbot):
     m.right_widget.vm_container.cursor_overlay.visible = False
 
     m.cleanup()
-
-
