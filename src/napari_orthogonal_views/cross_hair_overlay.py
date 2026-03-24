@@ -95,11 +95,12 @@ class VispyCrosshairOverlay(ViewerOverlayMixin, VispySceneOverlay):
         viewer: ViewerModel,
         overlay: CrosshairOverlay,
         parent: Node | None = None,
+        **kwargs,
     ) -> None:
         axis_order = getattr(overlay, "axis_order", (0, 1, 2))
         node = Crosshairs(axis_order=axis_order)
         super().__init__(
-            node=node, viewer=viewer, overlay=overlay, parent=parent
+            node=node, viewer=viewer, overlay=overlay, parent=parent, **kwargs
         )
         self.viewer = viewer
         self.viewer.dims.events.current_step.connect(self._move_crosshairs)
