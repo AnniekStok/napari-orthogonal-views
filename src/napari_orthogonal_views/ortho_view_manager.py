@@ -4,6 +4,7 @@ import weakref
 from collections.abc import Callable
 
 import cv2
+import napari
 import numpy as np
 import tqdm
 from napari._vispy.utils.visual import overlay_to_visual
@@ -11,8 +12,9 @@ from napari.components.viewer_model import ViewerModel
 from napari.layers import Layer
 from napari.utils.action_manager import action_manager
 from napari.utils.io import imsave
-from napari.utils.notifications import show_warning
+from napari.utils.notifications import show_info, show_warning
 from napari.viewer import Viewer
+from packaging.version import Version
 from qtpy.QtCore import Qt, QTimer
 from qtpy.QtWidgets import (
     QLayout,
@@ -34,6 +36,9 @@ from napari_orthogonal_views.ortho_view_widget import (
 from napari_orthogonal_views.screen_recorder_widget import ScreenRecorderWidget
 from napari_orthogonal_views.widget_controls import MainControlsWidget
 
+NAPARI_VERSION = Version(napari.__version__)
+USE_MOUSE_OVER_CANVAS = Version("0.7.0") > NAPARI_VERSION
+
 overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
 
 
@@ -41,6 +46,12 @@ def center_cross_on_mouse(
     viewer_model: ViewerModel,
 ):
     """Center the viewer dimension step to the mouse position"""
+
+    if USE_MOUSE_OVER_CANVAS and not getattr(
+        viewer_model, "mouse_over_canvas", True
+    ):
+        show_info("Please click on the canvas to activate it first.")
+        return
 
     step = tuple(
         np.round(
