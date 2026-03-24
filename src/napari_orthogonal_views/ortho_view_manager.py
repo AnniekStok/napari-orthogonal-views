@@ -11,7 +11,7 @@ from napari.components.viewer_model import ViewerModel
 from napari.layers import Layer
 from napari.utils.action_manager import action_manager
 from napari.utils.io import imsave
-from napari.utils.notifications import show_info, show_warning
+from napari.utils.notifications import show_warning
 from napari.viewer import Viewer
 from qtpy.QtCore import Qt, QTimer
 from qtpy.QtWidgets import (
@@ -41,12 +41,6 @@ def center_cross_on_mouse(
     viewer_model: ViewerModel,
 ):
     """Center the viewer dimension step to the mouse position"""
-
-    if not getattr(viewer_model, "mouse_over_canvas", True):
-        show_info(
-            "Mouse is not over the canvas. You may need to click on the canvas."
-        )
-        return
 
     step = tuple(
         np.round(
