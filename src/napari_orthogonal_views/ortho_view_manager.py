@@ -8,7 +8,7 @@ import numpy as np
 import tqdm
 from napari._vispy.utils.visual import overlay_to_visual
 from napari.components.viewer_model import ViewerModel
-from napari.layers import Layer
+from napari.layers import Labels, Layer
 from napari.utils.action_manager import action_manager
 from napari.utils.io import imsave
 from napari.utils.notifications import show_warning
@@ -184,15 +184,15 @@ class OrthoViewManager:
 
         if len(self.viewer.layers) > 0:
             show_warning(
-                "Blending of labels layers may not display correctly. You may have to set blending to 'translucent_no_depth' manually for new layers. To ensure correct blending of layers in the main viewer, call OrthoViewManager before adding layers to the viewer."
+                "Blending of labels layers may not display correctly. You may have to set blending to 'translucent_no_depth' manually for new label layers. To ensure correct blending of layers in the main viewer, call OrthoViewManager before adding layers to the viewer."
             )
             for (
-                _,
-                value,
+                layer,
+                visual,
             ) in self._original_qt_viewer.canvas.layer_to_visual.items():
-                value.node.set_gl_state(blend=True, depth_test=False)
-            for layer in self.viewer.layers:
-                layer.blending = "translucent_no_depth"
+                if isinstance(layer, Labels):
+                    visual.node.set_gl_state(blend=True, depth_test=False)
+                    layer.blending = "translucent_no_depth"
 
         self._container = container
 
