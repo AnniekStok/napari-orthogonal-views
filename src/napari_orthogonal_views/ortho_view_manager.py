@@ -413,16 +413,16 @@ class OrthoViewManager:
         self.bottom_widget = new_bottom
         old_bottom.deleteLater()
 
+        # Remove the screen recorder tab when hiding orthoviews
+        tab_index = self.controls_tab.indexOf(self.screen_recorder_widget)
+        if tab_index != -1:
+            self.controls_tab.removeTab(tab_index)
+
         # Removes controls and resize widgets.
         self.main_controls_widget.remove_controls()
         self.set_splitter_sizes(
             0.01, 0.01
         )  # minimal size for right and bottom
-
-        # Remove the screen recorder tab when hiding orthoviews
-        tab_index = self.controls_tab.indexOf(self.screen_recorder_widget)
-        if tab_index != -1:
-            self.controls_tab.removeTab(tab_index)
 
         # remove axis labels
         self.viewer.axes.visible = False
