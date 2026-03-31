@@ -167,6 +167,15 @@ class OrthoViewManager:
         self.v_splitter.addWidget(self.h_splitter_top)
         self.v_splitter.addWidget(self.h_splitter_bottom)
 
+        self.h_splitter_top.setChildrenCollapsible(True)
+        self.h_splitter_bottom.setChildrenCollapsible(True)
+        self.v_splitter.setChildrenCollapsible(True)
+
+        # Ensure widgets allow shrinking to 0
+        self.right_widget.setMinimumWidth(0)
+        self.bottom_widget.setMinimumHeight(0)
+        self.controls_tab.setMinimumHeight(0)
+
         # Sync the two horizontal splitters so user movement mirrors to the other
         def _connect_sync(source: QSplitter, target: QSplitter):
             def handler(*args, **kwargs):
@@ -189,7 +198,7 @@ class OrthoViewManager:
         container.setLayout(container_layout)
 
         layout.insertWidget(0, container)
-        self._set_splitter_sizes(
+        self.set_splitter_sizes(
             0.01, 0.01
         )  # minimal size for right and bottom
 
@@ -356,7 +365,7 @@ class OrthoViewManager:
             self.update_screen_recorder_axes()
 
         # assign 30% of window width and height to orth views
-        self._set_splitter_sizes(0.3, 0.3)
+        self.set_splitter_sizes(0.3, 0.3)
 
         self._shown = True
 
@@ -406,7 +415,7 @@ class OrthoViewManager:
 
         # Removes controls and resize widgets.
         self.main_controls_widget.remove_controls()
-        self._set_splitter_sizes(
+        self.set_splitter_sizes(
             0.01, 0.01
         )  # minimal size for right and bottom
 
@@ -497,7 +506,7 @@ class OrthoViewManager:
                     tuple(new_bottom_order[-3:])
                 )
 
-    def _set_splitter_sizes(
+    def set_splitter_sizes(
         self, side_fraction: float, bottom_fraction: float
     ) -> None:
         """Adjust the size of the right and bottom part of the splitters."""
@@ -506,16 +515,15 @@ class OrthoViewManager:
 
         central_width = max(100, central.width())
         central_height = max(100, central.height())
-        side_width = max(1, int(central_width * side_fraction))
-        bottom_height = max(1, int(central_height * bottom_fraction))
+        side_width = int(central_width * side_fraction)
+        bottom_height = int(central_height * bottom_fraction)
 
-        self.h_splitter_top.setSizes([central_width - side_width, side_width])
-        self.h_splitter_bottom.setSizes(
-            [central_width - side_width, side_width]
-        )
-        self.v_splitter.setSizes(
-            [central_height - bottom_height, bottom_height]
-        )
+        sizes_h = [central_width - side_width, side_width]
+        self.h_splitter_top.setSizes(sizes_h)
+        self.h_splitter_bottom.setSizes(sizes_h)
+
+        sizes_v = [central_height - bottom_height, bottom_height]
+        self.v_splitter.setSizes(sizes_v)
 
     def screenshot(
         self,
