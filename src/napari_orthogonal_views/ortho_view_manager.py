@@ -444,7 +444,14 @@ class OrthoViewManager:
         view_order = list(self.viewer.dims.order)
         ndim = len(view_order)
         view_order = [r - ndim for r in view_order]
-        self.cursor_overlay.axis_order = tuple(view_order[-3:])
+
+        # Ensure axis_order is always a 3-tuple
+        axis_order_tuple = tuple(view_order[-3:])
+        if len(axis_order_tuple) < 3:
+            axis_order_tuple = axis_order_tuple + (0,) * (
+                3 - len(axis_order_tuple)
+            )
+        self.cursor_overlay.axis_order = axis_order_tuple
 
         # update the dimension order in the orthoviews
         if len(self.viewer.dims.order) > 3:
@@ -457,7 +464,8 @@ class OrthoViewManager:
             d for d in self.viewer.dims.order if d not in new_order
         ]
 
-        if self.right_widget is not None:
+        # Only update orthoviews if there are at least 3 dimensions
+        if len(remaining_dims) >= 3 and self.right_widget is not None:
             right_order = self.right_widget.order
 
             new_right_order = new_order + [
