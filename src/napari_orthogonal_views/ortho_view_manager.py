@@ -25,10 +25,12 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from napari_orthogonal_views.cross_hair_overlay import (
-    CrosshairOverlay,
-    VispyCrosshairOverlay,
-)
+from napari._qt.qt_viewer import QtViewer
+
+# from napari_orthogonal_views.cross_hair_overlay import (
+#     CrosshairOverlay,
+#     VispyCrosshairOverlay,
+# )
 from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
     activate_on_hover,
@@ -39,7 +41,7 @@ from napari_orthogonal_views.widget_controls import MainControlsWidget
 NAPARI_VERSION = Version(napari.__version__)
 USE_MOUSE_OVER_CANVAS = Version("0.7.0") > NAPARI_VERSION
 
-overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
+# overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
 
 
 def center_cross_on_mouse(
@@ -103,13 +105,13 @@ class OrthoViewManager:
         )
         init_actions()
 
-        # Add crosshairs overlay to main viewer
-        self.cursor_overlay = CrosshairOverlay(
-            blending="translucent_no_depth", axis_order=(-3, -2, -1)
-        )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            self.viewer._overlays["crosshairs"] = self.cursor_overlay
+        # # Add crosshairs overlay to main viewer
+        # self.cursor_overlay = CrosshairOverlay(
+        #     blending="translucent_no_depth", axis_order=(-3, -2, -1)
+        # )
+        # with warnings.catch_warnings():
+        #     warnings.simplefilter("ignore")
+        #     self.viewer._overlays["crosshairs"] = self.cursor_overlay
 
         # make sure the viewer activates on hover
         with warnings.catch_warnings():
@@ -156,7 +158,9 @@ class OrthoViewManager:
 
         # Build orthogonal layout (splitters + widgets)
         self.h_splitter_top = QSplitter(Qt.Horizontal)
-        self.h_splitter_top.addWidget(self._original_qt_viewer)
+        self.new_qt_viewer = QtViewer(self.viewer)
+        self.h_splitter_top.addWidget(self.new_qt_viewer)
+        # self.h_splitter_top.addWidget(self._original_qt_viewer)
         self.h_splitter_top.addWidget(self.right_widget)
 
         self.h_splitter_bottom = QSplitter(Qt.Horizontal)
@@ -360,6 +364,25 @@ class OrthoViewManager:
 
         self._shown = True
 
+        # Force canvas overlay reinitialization after reparenting
+        # In napari 0.7.0+, overlay connections are lost when widget is reparented
+        # We must explicitly reinitialize the overlay system
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            canvas = self._original_qt_viewer.canvas
+            # Update all viewer overlays (brush circle, polygon points, etc.)
+            if hasattr(canvas, "_update_viewer_overlays"):
+                canvas._update_viewer_overlays()
+            # Update layer-specific overlays
+            for layer in self.viewer.layers:
+                if hasattr(canvas, "_update_layer_overlays"):
+                    canvas._update_layer_overlays(layer)
+            # Reposition overlays on the new canvas
+            if hasattr(canvas, "_update_overlay_canvas_positions"):
+                canvas._update_overlay_canvas_positions()
+            # Force canvas update
+            canvas.native.update()
+
         # activate checkboxes by default
         if self.activate_checkboxes:
             self.set_cross_hairs(True)
@@ -444,7 +467,7 @@ class OrthoViewManager:
         view_order = list(self.viewer.dims.order)
         ndim = len(view_order)
         view_order = [r - ndim for r in view_order]
-        self.cursor_overlay.axis_order = tuple(view_order[-3:])
+        # self.cursor_overlay.axis_order = tuple(view_order[-3:])
 
         # update the dimension order in the orthoviews
         if len(self.viewer.dims.order) > 3:

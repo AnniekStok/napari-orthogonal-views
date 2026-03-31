@@ -305,7 +305,7 @@ class OrthoViewWidget(QWidget):
 
         # Create QtViewer instance with viewer model
         self.qt_viewer = QtViewer(self.vm_container.viewer_model)
-        activate_on_hover(self.qt_viewer)  # activate without clicking
+        # activate_on_hover(self.qt_viewer)  # activate without clicking
         self.qt_viewer.setAcceptDrops(False)  # no drag and drop here
 
         # Set layout
@@ -317,6 +317,24 @@ class OrthoViewWidget(QWidget):
         # Add the layers currently in the viewer
         for i, layer in enumerate(self.viewer.layers):
             self.vm_container.add_layer(layer, i)
+
+        # Reinitialize overlays after QtViewer is created and added to layout
+        # This is critical for napari 0.7.0+ to properly set up overlay rendering
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            canvas = self.qt_viewer.canvas
+            # Update all viewer overlays (brush circle, polygon points, etc.)
+            if hasattr(canvas, "_update_viewer_overlays"):
+                canvas._update_viewer_overlays()
+            # Update layer-specific overlays
+            for layer in self.vm_container.viewer_model.layers:
+                if hasattr(canvas, "_update_layer_overlays"):
+                    canvas._update_layer_overlays(layer)
+            # Reposition overlays on the canvas
+            if hasattr(canvas, "_update_overlay_canvas_positions"):
+                canvas._update_overlay_canvas_positions()
+            # Force canvas update
+            canvas.native.update()
 
         # Ensure the layer with the same index is active
         active_layer = self.viewer.layers.selection.active
