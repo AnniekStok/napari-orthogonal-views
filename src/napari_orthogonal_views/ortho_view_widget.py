@@ -9,7 +9,7 @@ from napari.layers import Labels, Layer
 from napari.qt import QtViewer
 from napari.utils.events import Event, EventEmitter
 from napari.utils.events.event import WarningEmitter
-from qtpy.QtCore import Qt
+from qtpy.QtCore import QEvent, QObject, Qt
 from qtpy.QtWidgets import (
     QHBoxLayout,
     QWidget,
@@ -19,15 +19,34 @@ from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
 
 
 def activate_on_hover(qt_viewer: QtViewer):
-    """Activate mouse tracking on the canvas, so that it is not necessary to click first."""
+    """Activate mouse tracking on the canvas using event filtering,
+    without breaking napari's overlay event system.
+
+    Uses Qt's event filter instead of monkey-patching enterEvent
+    to avoid interfering with napari 0.7.0+'s overlay handling.
+    """
     canvas = qt_viewer.canvas.native
     canvas.setMouseTracking(True)
 
-    def on_enter(event):
-        canvas.setFocus(Qt.MouseFocusReason)
-        return super(type(canvas), canvas).enterEvent(event)
+    class CanvasEventFilter(QObject):
+        """Event filter to handle mouse enter without breaking overlay events."""
 
-    canvas.enterEvent = on_enter
+        def __init__(self, canvas_widget):
+            super().__init__()
+            self.canvas_widget = canvas_widget
+
+        def eventFilter(self, obj, event):
+            # Only handle Enter events for the canvas
+            if obj is self.canvas_widget and event.type() == QEvent.Enter:
+                self.canvas_widget.setFocus(Qt.MouseFocusReason)
+            # Always return False to allow normal event processing
+            return False
+
+    # Install the event filter instead of replacing the method
+    filter_obj = CanvasEventFilter(canvas)
+    canvas.installEventFilter(filter_obj)
+    # Keep a reference to prevent garbage collection
+    canvas._hover_event_filter = filter_obj
 
 
 def copy_layer(layer: Layer, name: str = "") -> Layer:
@@ -305,7 +324,7 @@ class OrthoViewWidget(QWidget):
 
         # Create QtViewer instance with viewer model
         self.qt_viewer = QtViewer(self.vm_container.viewer_model)
-        # activate_on_hover(self.qt_viewer)  # activate without clicking
+        activate_on_hover(self.qt_viewer)  # activate without clicking
         self.qt_viewer.setAcceptDrops(False)  # no drag and drop here
 
         # Set layout
