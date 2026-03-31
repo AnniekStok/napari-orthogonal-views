@@ -7,6 +7,7 @@ import cv2
 import napari
 import numpy as np
 import tqdm
+from napari._qt.qt_viewer import QtViewer
 from napari._vispy.utils.visual import overlay_to_visual
 from napari.components.viewer_model import ViewerModel
 from napari.layers import Labels, Layer
@@ -25,12 +26,10 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from napari._qt.qt_viewer import QtViewer
-
-# from napari_orthogonal_views.cross_hair_overlay import (
-#     CrosshairOverlay,
-#     VispyCrosshairOverlay,
-# )
+from napari_orthogonal_views.cross_hair_overlay import (
+    CrosshairOverlay,
+    VispyCrosshairOverlay,
+)
 from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
     activate_on_hover,
@@ -41,7 +40,7 @@ from napari_orthogonal_views.widget_controls import MainControlsWidget
 NAPARI_VERSION = Version(napari.__version__)
 USE_MOUSE_OVER_CANVAS = Version("0.7.0") > NAPARI_VERSION
 
-# overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
+overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
 
 
 def center_cross_on_mouse(
@@ -105,13 +104,13 @@ class OrthoViewManager:
         )
         init_actions()
 
-        # # Add crosshairs overlay to main viewer
-        # self.cursor_overlay = CrosshairOverlay(
-        #     blending="translucent_no_depth", axis_order=(-3, -2, -1)
-        # )
-        # with warnings.catch_warnings():
-        #     warnings.simplefilter("ignore")
-        #     self.viewer._overlays["crosshairs"] = self.cursor_overlay
+        # Add crosshairs overlay to main viewer
+        self.crosshair_overlay = CrosshairOverlay(
+            blending="translucent_no_depth", axis_order=(-3, -2, -1)
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.viewer._overlays["crosshairs"] = self.crosshair_overlay
 
         # make sure the viewer activates on hover
         with warnings.catch_warnings():
@@ -364,25 +363,6 @@ class OrthoViewManager:
 
         self._shown = True
 
-        # Force canvas overlay reinitialization after reparenting
-        # In napari 0.7.0+, overlay connections are lost when widget is reparented
-        # We must explicitly reinitialize the overlay system
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            canvas = self._original_qt_viewer.canvas
-            # Update all viewer overlays (brush circle, polygon points, etc.)
-            if hasattr(canvas, "_update_viewer_overlays"):
-                canvas._update_viewer_overlays()
-            # Update layer-specific overlays
-            for layer in self.viewer.layers:
-                if hasattr(canvas, "_update_layer_overlays"):
-                    canvas._update_layer_overlays(layer)
-            # Reposition overlays on the new canvas
-            if hasattr(canvas, "_update_overlay_canvas_positions"):
-                canvas._update_overlay_canvas_positions()
-            # Force canvas update
-            canvas.native.update()
-
         # activate checkboxes by default
         if self.activate_checkboxes:
             self.set_cross_hairs(True)
@@ -467,7 +447,7 @@ class OrthoViewManager:
         view_order = list(self.viewer.dims.order)
         ndim = len(view_order)
         view_order = [r - ndim for r in view_order]
-        # self.cursor_overlay.axis_order = tuple(view_order[-3:])
+        # self.crosshair_overlay.axis_order = tuple(view_order[-3:])
 
         # update the dimension order in the orthoviews
         if len(self.viewer.dims.order) > 3:
@@ -499,7 +479,7 @@ class OrthoViewManager:
                 # use inverse numbering
                 ndim = len(new_right_order)
                 new_right_order = [r - ndim for r in new_right_order]
-                self.right_widget.vm_container.cursor_overlay.axis_order = (
+                self.right_widget.vm_container.crosshair_overlay.axis_order = (
                     tuple(new_right_order[-3:])
                 )
 
@@ -516,8 +496,8 @@ class OrthoViewManager:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 new_bottom_order = [r - ndim for r in new_bottom_order]
-                self.bottom_widget.vm_container.cursor_overlay.axis_order = (
-                    tuple(new_bottom_order[-3:])
+                self.bottom_widget.vm_container.crosshair_overlay.axis_order = tuple(
+                    new_bottom_order[-3:]
                 )
 
     def _set_splitter_sizes(

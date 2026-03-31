@@ -309,7 +309,7 @@ def test_crosshair_overlay_visibility(make_napari_viewer, qtbot):
     lazy initialization of the vispy overlay via create_vispy_overlay).
 
     The CrosshairOverlay lives in the ortho viewer model's _overlays, so the
-    crash is triggered by setting visible on the ortho viewer's cursor_overlay —
+    crash is triggered by setting visible on the ortho viewer's crosshair_overlay —
     not on the main viewer, which has no CrosshairOverlay.
     """
     viewer = make_napari_viewer()
@@ -320,7 +320,7 @@ def test_crosshair_overlay_visibility(make_napari_viewer, qtbot):
     # Triggering visible=True on the ortho viewer's CrosshairOverlay causes
     # napari 0.7.0 to call create_vispy_overlay(font_manager=...) for it,
     # which crashes because VispyCrosshairOverlay.__init__ has no **kwargs.
-    m.right_widget.vm_container.cursor_overlay.visible = True
-    m.right_widget.vm_container.cursor_overlay.visible = False
+    m.right_widget.vm_container.crosshair_overlay.visible = True
+    m.right_widget.vm_container.crosshair_overlay.visible = False
 
     m.cleanup()

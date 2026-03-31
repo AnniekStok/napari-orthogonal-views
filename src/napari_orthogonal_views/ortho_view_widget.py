@@ -92,12 +92,12 @@ class ViewerModelContainer:
         self.sync_filters = sync_filters or {}
 
         # Add crosshair overlays (initially invisible)
-        self.cursor_overlay = CrosshairOverlay(
+        self.crosshair_overlay = CrosshairOverlay(
             blending="translucent_no_depth", axis_order=order
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.viewer_model._overlays["crosshairs"] = self.cursor_overlay
+            self.viewer_model._overlays["crosshairs"] = self.crosshair_overlay
 
     def _sync_layer_properties(
         self, orig_layer: Layer, copied_layer: Layer
