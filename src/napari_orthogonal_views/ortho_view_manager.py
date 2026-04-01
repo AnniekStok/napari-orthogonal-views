@@ -29,32 +29,15 @@ from napari_orthogonal_views.cross_hair_overlay import (
 )
 from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
-    activate_on_hover,
 )
 from napari_orthogonal_views.screen_recorder_widget import ScreenRecorderWidget
+from napari_orthogonal_views.viewer_utils import (
+    activate_on_hover,
+    center_cross_on_mouse,
+)
 from napari_orthogonal_views.widget_controls import MainControlsWidget
 
 overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
-
-
-def center_cross_on_mouse(
-    viewer_model: ViewerModel,
-):
-    """Center the viewer dimension step to the mouse position"""
-
-    step = tuple(
-        np.round(
-            [
-                max(min_, min(p, max_)) / step
-                for p, (min_, max_, step) in zip(
-                    viewer_model.cursor.position,
-                    viewer_model.dims.range,
-                    strict=False,
-                )
-            ]
-        ).astype(int)
-    )
-    viewer_model.dims.current_step = step
 
 
 def init_actions():
