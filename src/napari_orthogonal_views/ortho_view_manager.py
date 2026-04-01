@@ -158,6 +158,12 @@ class OrthoViewManager:
         # Build orthogonal layout (splitters + widgets)
         self.h_splitter_top = QSplitter(Qt.Horizontal)
         self.new_qt_viewer = QtViewer(self.viewer)
+
+        # Make sure the new viewer activates on hover
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            activate_on_hover(self.new_qt_viewer)
+
         self.h_splitter_top.addWidget(self.new_qt_viewer)
         # self.h_splitter_top.addWidget(self._original_qt_viewer)
         self.h_splitter_top.addWidget(self.right_widget)
