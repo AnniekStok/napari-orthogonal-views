@@ -7,7 +7,6 @@ import cv2
 import napari
 import numpy as np
 import tqdm
-from napari._qt.qt_viewer import QtViewer
 from napari._vispy.utils.visual import overlay_to_visual
 from napari.components.viewer_model import ViewerModel
 from napari.layers import Labels, Layer
@@ -157,15 +156,7 @@ class OrthoViewManager:
 
         # Build orthogonal layout (splitters + widgets)
         self.h_splitter_top = QSplitter(Qt.Horizontal)
-        self.new_qt_viewer = QtViewer(self.viewer)
-
-        # Make sure the new viewer activates on hover
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            activate_on_hover(self.new_qt_viewer)
-
-        self.h_splitter_top.addWidget(self.new_qt_viewer)
-        # self.h_splitter_top.addWidget(self._original_qt_viewer)
+        self.h_splitter_top.addWidget(self._original_qt_viewer)
         self.h_splitter_top.addWidget(self.right_widget)
 
         self.h_splitter_bottom = QSplitter(Qt.Horizontal)
