@@ -129,7 +129,6 @@ class OrthoViewManager:
 
         # Find and remove the current canvas widget
         self._original_qt_viewer = layout.itemAt(0).widget()
-        self._original_qt_viewer.canvas.native.setMouseTracking(True)
         if self._original_qt_viewer is None:
             raise RuntimeError(
                 "Couldn't locate canvas widget in central layout."
