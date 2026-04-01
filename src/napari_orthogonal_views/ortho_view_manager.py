@@ -415,7 +415,7 @@ class OrthoViewManager:
         view_order = list(self.viewer.dims.order)
         ndim = len(view_order)
         view_order = [r - ndim for r in view_order]
-        # self.crosshair_overlay.axis_order = tuple(view_order[-3:])
+        self.crosshair_overlay.axis_order = tuple(view_order[-3:])
 
         # update the dimension order in the orthoviews
         if len(self.viewer.dims.order) > 3:
