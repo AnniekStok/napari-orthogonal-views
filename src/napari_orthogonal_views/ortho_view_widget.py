@@ -9,25 +9,13 @@ from napari.layers import Labels, Layer
 from napari.qt import QtViewer
 from napari.utils.events import Event, EventEmitter
 from napari.utils.events.event import WarningEmitter
-from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
     QHBoxLayout,
     QWidget,
 )
 
 from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
-
-
-def activate_on_hover(qt_viewer: QtViewer):
-    """Activate mouse tracking on the canvas, so that it is not necessary to click first."""
-    canvas = qt_viewer.canvas.native
-    canvas.setMouseTracking(True)
-
-    def on_enter(event):
-        canvas.setFocus(Qt.MouseFocusReason)
-        return super(type(canvas), canvas).enterEvent(event)
-
-    canvas.enterEvent = on_enter
+from napari_orthogonal_views.viewer_utils import activate_on_hover
 
 
 def copy_layer(layer: Layer, name: str = "") -> Layer:
@@ -92,12 +80,12 @@ class ViewerModelContainer:
         self.sync_filters = sync_filters or {}
 
         # Add crosshair overlays (initially invisible)
-        self.cursor_overlay = CrosshairOverlay(
+        self.crosshair_overlay = CrosshairOverlay(
             blending="translucent_no_depth", axis_order=order
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.viewer_model._overlays["crosshairs"] = self.cursor_overlay
+            self.viewer_model._overlays["crosshairs"] = self.crosshair_overlay
 
     def _sync_layer_properties(
         self, orig_layer: Layer, copied_layer: Layer
@@ -244,6 +232,9 @@ class ViewerModelContainer:
             # Wrap undo/redo
             wrap_undo_redo(copied_layer, orig_layer, self._update_data)
             wrap_undo_redo(orig_layer, copied_layer, self._update_data)
+
+            # force blending mode for labels layers to be translucent_no_depth - or they may not show up correctly. They can be changed to another mode afterwards.
+            orig_layer.blending = "translucent_no_depth"
 
             # if the original layer is a labels layer, we want to connect to the paint
             # event, because we need it in order to invoke syncing between the different
