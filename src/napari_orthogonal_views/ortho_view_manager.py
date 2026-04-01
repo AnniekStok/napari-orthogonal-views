@@ -195,7 +195,7 @@ class OrthoViewManager:
 
         if len(self.viewer.layers) > 0:
             show_warning(
-                "Blending of labels layers may not display correctly. You may have to set blending to 'translucent_no_depth' manually for new label layers. To ensure correct blending of layers in the main viewer, call OrthoViewManager before adding layers to the viewer."
+                "Blending of labels layers may not display correctly. To ensure correct blending of layers in the main viewer, call OrthoViewManager before adding layers to the viewer."
             )
             for (
                 layer,

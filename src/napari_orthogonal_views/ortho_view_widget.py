@@ -264,6 +264,9 @@ class ViewerModelContainer:
             wrap_undo_redo(copied_layer, orig_layer, self._update_data)
             wrap_undo_redo(orig_layer, copied_layer, self._update_data)
 
+            # force blending mode for labels layers to be translucent_no_depth - or they may not show up correctly. They can be changed to another mode afterwards.
+            orig_layer.blending = "translucent_no_depth"
+
             # if the original layer is a labels layer, we want to connect to the paint
             # event, because we need it in order to invoke syncing between the different
             # viewers. (Paint event does not trigger 'data' event by itself).
