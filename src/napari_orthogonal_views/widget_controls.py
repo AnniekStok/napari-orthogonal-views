@@ -2,6 +2,7 @@ from psygnal import Signal
 from qtpy.QtWidgets import (
     QCheckBox,
     QLabel,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -24,11 +25,18 @@ class MainControlsWidget(QWidget):
         self.controls_widget = QWidget()
 
         self.main_layout = QVBoxLayout()
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
 
         self.main_layout.addWidget(self.show_checkbox)
         self.main_layout.addWidget(self.controls_widget)
+        self.main_layout.addStretch()
 
         self.setLayout(self.main_layout)
+
+        # Allow this widget to shrink to 0 height
+        self.setMinimumHeight(0)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     def set_show_views(self, state: bool) -> None:
         """Emit signal to show/hide orth views"""

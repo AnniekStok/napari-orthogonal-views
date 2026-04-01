@@ -4,7 +4,6 @@ import weakref
 from collections.abc import Callable
 
 import cv2
-import napari
 import numpy as np
 import tqdm
 from napari._vispy.utils.visual import overlay_to_visual
@@ -12,9 +11,8 @@ from napari.components.viewer_model import ViewerModel
 from napari.layers import Labels, Layer
 from napari.utils.action_manager import action_manager
 from napari.utils.io import imsave
-from napari.utils.notifications import show_info, show_warning
+from napari.utils.notifications import show_warning
 from napari.viewer import Viewer
-from packaging.version import Version
 from qtpy.QtCore import Qt, QTimer
 from qtpy.QtWidgets import (
     QLayout,
@@ -31,41 +29,15 @@ from napari_orthogonal_views.cross_hair_overlay import (
 )
 from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
-    activate_on_hover,
 )
 from napari_orthogonal_views.screen_recorder_widget import ScreenRecorderWidget
+from napari_orthogonal_views.viewer_utils import (
+    activate_on_hover,
+    center_cross_on_mouse,
+)
 from napari_orthogonal_views.widget_controls import MainControlsWidget
 
-NAPARI_VERSION = Version(napari.__version__)
-USE_MOUSE_OVER_CANVAS = Version("0.7.0") > NAPARI_VERSION
-
 overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
-
-
-def center_cross_on_mouse(
-    viewer_model: ViewerModel,
-):
-    """Center the viewer dimension step to the mouse position"""
-
-    if USE_MOUSE_OVER_CANVAS and not getattr(
-        viewer_model, "mouse_over_canvas", True
-    ):
-        show_info("Please click on the canvas to activate it first.")
-        return
-
-    step = tuple(
-        np.round(
-            [
-                max(min_, min(p, max_)) / step
-                for p, (min_, max_, step) in zip(
-                    viewer_model.cursor.position,
-                    viewer_model.dims.range,
-                    strict=False,
-                )
-            ]
-        ).astype(int)
-    )
-    viewer_model.dims.current_step = step
 
 
 def init_actions():
@@ -104,12 +76,12 @@ class OrthoViewManager:
         init_actions()
 
         # Add crosshairs overlay to main viewer
-        self.cursor_overlay = CrosshairOverlay(
+        self.crosshair_overlay = CrosshairOverlay(
             blending="translucent_no_depth", axis_order=(-3, -2, -1)
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self.viewer._overlays["crosshairs"] = self.cursor_overlay
+            self.viewer._overlays["crosshairs"] = self.crosshair_overlay
 
         # make sure the viewer activates on hover
         with warnings.catch_warnings():
@@ -129,7 +101,6 @@ class OrthoViewManager:
 
         # Find and remove the current canvas widget
         self._original_qt_viewer = layout.itemAt(0).widget()
-        self._original_qt_viewer.canvas.native.setMouseTracking(True)
         if self._original_qt_viewer is None:
             raise RuntimeError(
                 "Couldn't locate canvas widget in central layout."
@@ -167,6 +138,15 @@ class OrthoViewManager:
         self.v_splitter.addWidget(self.h_splitter_top)
         self.v_splitter.addWidget(self.h_splitter_bottom)
 
+        self.h_splitter_top.setChildrenCollapsible(True)
+        self.h_splitter_bottom.setChildrenCollapsible(True)
+        self.v_splitter.setChildrenCollapsible(True)
+
+        # Ensure widgets allow shrinking to 0
+        self.right_widget.setMinimumWidth(0)
+        self.bottom_widget.setMinimumHeight(0)
+        self.controls_tab.setMinimumHeight(0)
+
         # Sync the two horizontal splitters so user movement mirrors to the other
         def _connect_sync(source: QSplitter, target: QSplitter):
             def handler(*args, **kwargs):
@@ -189,13 +169,13 @@ class OrthoViewManager:
         container.setLayout(container_layout)
 
         layout.insertWidget(0, container)
-        self._set_splitter_sizes(
+        self.set_splitter_sizes(
             0.01, 0.01
         )  # minimal size for right and bottom
 
         if len(self.viewer.layers) > 0:
             show_warning(
-                "Blending of labels layers may not display correctly. You may have to set blending to 'translucent_no_depth' manually for new label layers. To ensure correct blending of layers in the main viewer, call OrthoViewManager before adding layers to the viewer."
+                "Blending of labels layers may not display correctly. To ensure correct blending of layers in the main viewer, call OrthoViewManager before adding layers to the viewer."
             )
             for (
                 layer,
@@ -356,7 +336,7 @@ class OrthoViewManager:
             self.update_screen_recorder_axes()
 
         # assign 30% of window width and height to orth views
-        self._set_splitter_sizes(0.3, 0.3)
+        self.set_splitter_sizes(0.3, 0.3)
 
         self._shown = True
 
@@ -404,16 +384,16 @@ class OrthoViewManager:
         self.bottom_widget = new_bottom
         old_bottom.deleteLater()
 
-        # Removes controls and resize widgets.
-        self.main_controls_widget.remove_controls()
-        self._set_splitter_sizes(
-            0.01, 0.01
-        )  # minimal size for right and bottom
-
         # Remove the screen recorder tab when hiding orthoviews
         tab_index = self.controls_tab.indexOf(self.screen_recorder_widget)
         if tab_index != -1:
             self.controls_tab.removeTab(tab_index)
+
+        # Removes controls and resize widgets.
+        self.main_controls_widget.remove_controls()
+        self.set_splitter_sizes(
+            0.01, 0.01
+        )  # minimal size for right and bottom
 
         # remove axis labels
         self.viewer.axes.visible = False
@@ -451,7 +431,8 @@ class OrthoViewManager:
             axis_order_tuple = axis_order_tuple + (0,) * (
                 3 - len(axis_order_tuple)
             )
-        self.cursor_overlay.axis_order = axis_order_tuple
+
+        self.crosshair_overlay.axis_order = axis_order_tuple
 
         # update the dimension order in the orthoviews
         if len(self.viewer.dims.order) > 3:
@@ -484,7 +465,7 @@ class OrthoViewManager:
                 # use inverse numbering
                 ndim = len(new_right_order)
                 new_right_order = [r - ndim for r in new_right_order]
-                self.right_widget.vm_container.cursor_overlay.axis_order = (
+                self.right_widget.vm_container.crosshair_overlay.axis_order = (
                     tuple(new_right_order[-3:])
                 )
 
@@ -501,11 +482,11 @@ class OrthoViewManager:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 new_bottom_order = [r - ndim for r in new_bottom_order]
-                self.bottom_widget.vm_container.cursor_overlay.axis_order = (
-                    tuple(new_bottom_order[-3:])
+                self.bottom_widget.vm_container.crosshair_overlay.axis_order = tuple(
+                    new_bottom_order[-3:]
                 )
 
-    def _set_splitter_sizes(
+    def set_splitter_sizes(
         self, side_fraction: float, bottom_fraction: float
     ) -> None:
         """Adjust the size of the right and bottom part of the splitters."""
@@ -514,16 +495,15 @@ class OrthoViewManager:
 
         central_width = max(100, central.width())
         central_height = max(100, central.height())
-        side_width = max(1, int(central_width * side_fraction))
-        bottom_height = max(1, int(central_height * bottom_fraction))
+        side_width = int(central_width * side_fraction)
+        bottom_height = int(central_height * bottom_fraction)
 
-        self.h_splitter_top.setSizes([central_width - side_width, side_width])
-        self.h_splitter_bottom.setSizes(
-            [central_width - side_width, side_width]
-        )
-        self.v_splitter.setSizes(
-            [central_height - bottom_height, bottom_height]
-        )
+        sizes_h = [central_width - side_width, side_width]
+        self.h_splitter_top.setSizes(sizes_h)
+        self.h_splitter_bottom.setSizes(sizes_h)
+
+        sizes_v = [central_height - bottom_height, bottom_height]
+        self.v_splitter.setSizes(sizes_v)
 
     def screenshot(
         self,
