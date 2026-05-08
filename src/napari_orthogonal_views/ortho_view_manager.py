@@ -13,7 +13,7 @@ from napari.utils.action_manager import action_manager
 from napari.utils.io import imsave
 from napari.utils.notifications import show_warning
 from napari.viewer import Viewer
-from qtpy.QtCore import Qt, QTimer
+from qtpy.QtCore import QEvent, QObject, Qt, QTimer
 from qtpy.QtWidgets import (
     QLayout,
     QSizePolicy,
@@ -50,6 +50,19 @@ def init_actions():
     action_manager.bind_shortcut("napari:move_point", "T")
 
 
+class _ViewerCloseEventFilter(QObject):
+    """Event filter to trigger cleanup when the viewer is closed."""
+
+    def __init__(self, manager):
+        super().__init__()
+        self._manager = manager
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Close:
+            self._manager.cleanup()
+        return False
+
+
 class OrthoViewManager:
     """Replace the main central widget, to allow insertion and removal of orthogonal
     views.
@@ -74,6 +87,10 @@ class OrthoViewManager:
             False  # automatically activate checkboxes when shown
         )
         init_actions()
+
+        # Install event filter to cleanup on viewer close
+        self._close_event_filter = _ViewerCloseEventFilter(self)
+        viewer.window._qt_window.installEventFilter(self._close_event_filter)
 
         # Add crosshairs overlay to main viewer
         self.crosshair_overlay = CrosshairOverlay(
