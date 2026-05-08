@@ -12,6 +12,14 @@ from napari_orthogonal_views.ortho_view_manager import (
 from napari_orthogonal_views.ortho_view_widget import OrthoViewWidget
 
 
+def test_close_viewer(make_napari_viewer, qtbot):
+    """Test that closing the viewer does not leak anything"""
+
+    viewer = make_napari_viewer()
+    show_orthogonal_views(viewer)
+    viewer.close()
+
+
 def test_orthoview_manager(make_napari_viewer, qtbot):
     """Test initialization of the ortho view manager and its show/hide functions."""
 
