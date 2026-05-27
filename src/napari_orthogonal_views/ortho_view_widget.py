@@ -2,6 +2,7 @@ import contextlib
 import warnings
 from collections.abc import Callable
 from types import MethodType
+from typing import Any
 
 import napari
 from napari.components.viewer_model import ViewerModel
@@ -200,8 +201,8 @@ class ViewerModelContainer:
     def _sync_property(
         self,
         property_name: str,
-        source_obj,
-        target_obj,
+        source_obj: Any,
+        target_obj: Any,
         event: Event,
     ) -> None:
         """Sync a property between objects when their events fire."""
