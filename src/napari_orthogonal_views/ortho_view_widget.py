@@ -5,7 +5,7 @@ from types import MethodType
 
 import napari
 from napari.components.viewer_model import ViewerModel
-from napari.layers import Labels, Layer
+from napari.layers import Labels, Layer, Points
 from napari.qt import QtViewer
 from napari.utils.events import Event, EventEmitter
 from napari.utils.events.event import WarningEmitter
@@ -87,16 +87,35 @@ class ViewerModelContainer:
             warnings.simplefilter("ignore")
             self.viewer_model._overlays["crosshairs"] = self.crosshair_overlay
 
-    def _sync_layer_properties(
-        self, orig_layer: Layer, copied_layer: Layer
+    def _sync_properties(
+        self,
+        source_obj,
+        target_obj,
+        property_names: list[str] | None = None,
+        apply_filters: bool = False,
     ) -> None:
-        """Sync properties between orig_layer and copied_layer, applying optional
-        sync_filters."""
+        """Sync properties between source and target objects.
 
-        def is_excluded(layer, prop, direction):
+        Works for both layer properties and nested object properties (e.g., TextManager).
+
+        Args:
+            source_obj: The source object to sync from.
+            target_obj: The target object to sync to.
+            property_names: List of property names to sync. If None, auto-discovers properties
+                (only works for layers using get_property_names).
+            apply_filters: Whether to apply sync_filters (only relevant for layers).
+        """
+
+        if property_names is None:
+            # Auto-discover properties (for layers)
+            property_names = get_property_names(source_obj)
+
+        def is_excluded(obj, prop, direction):
             """Check whether to skip syncing a property in a given direction."""
+            if not apply_filters:
+                return False
             for cls, rules in self.sync_filters.items():
-                if isinstance(layer, cls):
+                if isinstance(obj, cls):
                     excluded = rules.get(f"{direction}_exclude", set())
                     if excluded == "*":  # block all
                         return True
@@ -104,38 +123,49 @@ class ViewerModelContainer:
                         return True
             return False
 
-        for property_name in get_property_names(orig_layer):
-            # Forward sync: orig_layer → copied_layer
-            if not is_excluded(orig_layer, property_name, "forward"):
+        for prop_name in property_names:
+            if not hasattr(source_obj, prop_name):
+                continue
+
+            # Forward sync: source → target
+            if not is_excluded(source_obj, prop_name, "forward"):
 
                 # first copy the value immediately
                 if (
-                    property_name != "current_size"
+                    prop_name != "current_size"
                 ):  # skip initially (special case)
                     setattr(
-                        copied_layer,
-                        property_name,
-                        getattr(orig_layer, property_name),
+                        target_obj,
+                        prop_name,
+                        getattr(source_obj, prop_name),
                     )
 
                 # set up syncing
-                getattr(orig_layer.events, property_name).connect(
-                    own_partial(
-                        self._sync_property,
-                        property_name,
-                        orig_layer,
-                        copied_layer,
-                    )
-                )
+                if hasattr(source_obj, "events") and hasattr(
+                    source_obj.events, prop_name
+                ):
 
-            # Reverse sync: copied_layer → orig_layer
-            if not is_excluded(orig_layer, property_name, "reverse"):
-                getattr(copied_layer.events, property_name).connect(
+                    getattr(source_obj.events, prop_name).connect(
+                        own_partial(
+                            self._sync_property,
+                            prop_name,
+                            source_obj,
+                            target_obj,
+                        )
+                    )
+
+            # Reverse sync: target → source
+            if (
+                not is_excluded(source_obj, prop_name, "reverse")
+                and hasattr(target_obj, "events")
+                and hasattr(target_obj.events, prop_name)
+            ):
+                getattr(target_obj.events, prop_name).connect(
                     own_partial(
                         self._sync_property,
-                        property_name,
-                        copied_layer,
-                        orig_layer,
+                        prop_name,
+                        target_obj,
+                        source_obj,
                     )
                 )
 
@@ -167,20 +197,20 @@ class ViewerModelContainer:
     def _sync_property(
         self,
         property_name: str,
-        source_layer: Layer,
-        target_layer: Layer,
+        source_obj,
+        target_obj,
         event: Event,
     ) -> None:
-        """Sync a property of a layer in this viewer model."""
+        """Sync a property between objects when their events fire."""
 
         if self._block:
             return
 
         self._block = True
         setattr(
-            target_layer,
+            target_obj,
             property_name,
-            getattr(source_layer, property_name),
+            getattr(source_obj, property_name),
         )
         self._block = False
 
@@ -204,7 +234,25 @@ class ViewerModelContainer:
         orig_layer.events.name.connect(sync_name_wrapper)
 
         # sync properties
-        self._sync_layer_properties(orig_layer, copied_layer)
+        self._sync_properties(orig_layer, copied_layer, apply_filters=True)
+
+        if isinstance(orig_layer, Points):
+            # Sync TextManager properties using unified property syncing
+            self._sync_properties(
+                orig_layer.text,
+                copied_layer.text,
+                [
+                    "string",
+                    "color",
+                    "visible",
+                    "size",
+                    "scaling",
+                    "blending",
+                    "anchor",
+                    "translation",
+                    "rotation",
+                ],
+            )
 
         if isinstance(orig_layer, Labels):
 
