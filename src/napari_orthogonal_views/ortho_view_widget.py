@@ -34,10 +34,12 @@ def copy_layer(layer: Layer, name: str = "") -> Layer:
     return copied_layer
 
 
-def get_property_names(obj) -> list[str]:
-    """Return a list of all properties that emit events.
-
-    Works for both napari layers and EventedModel objects (like TextManager).
+def get_property_names(obj: Any) -> list[str]:
+    """Extract all property names that emit events on the given object.
+    Args:
+        obj: a napari layer or an EventedModel object (like TextManager on layer.text)
+    Returns:
+        A list of property names that emit events.
     """
 
     emitter_list = []
@@ -101,15 +103,16 @@ class ViewerModelContainer:
 
     def _sync_properties(
         self,
-        source_obj,
-        target_obj,
+        source_obj: Any,
+        target_obj: Any,
     ) -> None:
         """Sync properties between source and target objects.
 
         Works for both layer properties and nested object properties (e.g., TextManager).
 
         Args:
-            source_obj: The source object to sync from.
+            source_obj: The source object to sync from. It can be a napari layer or an
+            EventedModel object (like TextManager on layer.text).
             target_obj: The target object to sync to.
         """
 
