@@ -75,12 +75,14 @@ class ControlsWidget(QWidget):
         self.show_axes.setChecked(True)
         self.zoom_widget = ZoomWidget(widgets=widgets)
         self.center_widget = CenterWidget(widgets=widgets)
+        self.grid_widget = GridWidget(widgets=widgets)
 
         layout = QVBoxLayout()
         layout.addWidget(self.cross_widget)
         layout.addWidget(self.show_axes)
         layout.addWidget(self.zoom_widget)
         layout.addWidget(self.center_widget)
+        layout.addWidget(self.grid_widget)
         label = QLabel("Press T to center view on mouse")
         label.setWordWrap(True)
         font = label.font()
@@ -88,6 +90,80 @@ class ControlsWidget(QWidget):
         label.setFont(font)
         layout.addWidget(label)
         self.setLayout(layout)
+
+
+class GridWidget(QCheckBox):
+    """Checkbox to sync/unsync grid view"""
+
+    def __init__(self, widgets: list[QWidget]):
+        super().__init__("Sync grid")
+        self.widgets = widgets
+        self.stateChanged.connect(self.set_grid_sync)
+
+        # internal guard to prevent recursion
+        self._syncing = False
+
+    @staticmethod
+    def _copy_grid(src, dst):
+        """Copy all relevant grid properties."""
+        dst.enabled = src.enabled
+        dst.shape = getattr(src, "shape", dst.shape)
+        dst.stride = getattr(src, "stride", dst.stride)
+        dst.spacing = getattr(src, "spacing", getattr(dst, "spacing", None))
+
+    def _viewer_to_vm(self, widget, _event=None):
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            self._copy_grid(
+                widget.viewer.grid,
+                widget.vm_container.viewer_model.grid,
+            )
+        finally:
+            self._syncing = False
+
+    def _vm_to_viewer(self, widget, _event=None):
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            self._copy_grid(
+                widget.vm_container.viewer_model.grid,
+                widget.viewer.grid,
+            )
+        finally:
+            self._syncing = False
+
+    def set_grid_sync(self, state: int) -> None:
+        """Enable/disable grid sync across all widgets."""
+
+        sync = state == 2
+
+        for widget in self.widgets:
+
+            # push initial state when enabling
+            if sync:
+                self._copy_grid(
+                    widget.viewer.grid,
+                    widget.vm_container.viewer_model.grid,
+                )
+
+            # viewer -> vm
+            widget.sync_event(
+                widget.viewer.grid.events,
+                lambda e, w=widget: self._viewer_to_vm(w, e),
+                sync,
+                key_label="grid_viewer_to_vm",
+            )
+
+            # vm -> viewer
+            widget.sync_event(
+                widget.vm_container.viewer_model.grid.events,
+                lambda e, w=widget: self._vm_to_viewer(w, e),
+                sync,
+                key_label="grid_vm_to_viewer",
+            )
 
 
 class ZoomWidget(QCheckBox):
