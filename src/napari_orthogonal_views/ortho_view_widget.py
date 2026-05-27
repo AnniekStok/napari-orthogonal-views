@@ -33,21 +33,32 @@ def copy_layer(layer: Layer, name: str = "") -> Layer:
     return copied_layer
 
 
-def get_property_names(layer: Layer) -> list[str]:
-    """Return a list of all the layer properties (opacity, mode, ...) that emit events."""
+def get_property_names(obj) -> list[str]:
+    """Return a list of all properties that emit events.
 
-    klass = layer.__class__
+    Works for both napari layers and EventedModel objects (like TextManager).
+    """
+
     emitter_list = []
-    for event_name, event_emitter in layer.events.emitters.items():
+
+    if not hasattr(obj, "events"):
+        return emitter_list
+
+    for event_name, event_emitter in obj.events.emitters.items():
         if isinstance(event_emitter, WarningEmitter):
             continue
         if event_name in ("thumbnail", "name"):
             continue
-        if (
-            isinstance(getattr(klass, event_name, None), property)
-            and getattr(klass, event_name).fset is not None
-        ):
+
+        # For napari layers, check if it's a settable property
+        klass = obj.__class__
+        if isinstance(getattr(klass, event_name, None), property):
+            if getattr(klass, event_name).fset is not None:
+                emitter_list.append(event_name)
+        # For EventedModel objects, all emitters correspond to syncable properties
+        elif hasattr(obj, event_name):
             emitter_list.append(event_name)
+
     return emitter_list
 
 
@@ -91,8 +102,6 @@ class ViewerModelContainer:
         self,
         source_obj,
         target_obj,
-        property_names: list[str] | None = None,
-        apply_filters: bool = False,
     ) -> None:
         """Sync properties between source and target objects.
 
@@ -101,19 +110,13 @@ class ViewerModelContainer:
         Args:
             source_obj: The source object to sync from.
             target_obj: The target object to sync to.
-            property_names: List of property names to sync. If None, auto-discovers properties
-                (only works for layers using get_property_names).
-            apply_filters: Whether to apply sync_filters (only relevant for layers).
         """
 
-        if property_names is None:
-            # Auto-discover properties (for layers)
-            property_names = get_property_names(source_obj)
+        # Auto-discover properties using get_property_names
+        property_names = get_property_names(source_obj)
 
         def is_excluded(obj, prop, direction):
             """Check whether to skip syncing a property in a given direction."""
-            if not apply_filters:
-                return False
             for cls, rules in self.sync_filters.items():
                 if isinstance(obj, cls):
                     excluded = rules.get(f"{direction}_exclude", set())
@@ -234,25 +237,11 @@ class ViewerModelContainer:
         orig_layer.events.name.connect(sync_name_wrapper)
 
         # sync properties
-        self._sync_properties(orig_layer, copied_layer, apply_filters=True)
+        self._sync_properties(orig_layer, copied_layer)
 
         if isinstance(orig_layer, Points):
             # Sync TextManager properties using unified property syncing
-            self._sync_properties(
-                orig_layer.text,
-                copied_layer.text,
-                [
-                    "string",
-                    "color",
-                    "visible",
-                    "size",
-                    "scaling",
-                    "blending",
-                    "anchor",
-                    "translation",
-                    "rotation",
-                ],
-            )
+            self._sync_properties(orig_layer.text, copied_layer.text)
 
         if isinstance(orig_layer, Labels):
 
