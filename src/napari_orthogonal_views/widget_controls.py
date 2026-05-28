@@ -95,13 +95,10 @@ class ControlsWidget(QWidget):
 class GridWidget(QCheckBox):
     """Checkbox to sync/unsync grid view"""
 
-    def __init__(self, widgets: list[QWidget]):
+    def __init__(self, widgets: list[OrthoViewWidget]):
         super().__init__("Sync grid")
         self.widgets = widgets
         self.stateChanged.connect(self.set_grid_sync)
-
-        # internal guard to prevent recursion
-        self._syncing = False
 
     @staticmethod
     def _copy_grid(src, dst):
@@ -111,29 +108,29 @@ class GridWidget(QCheckBox):
         dst.stride = getattr(src, "stride", dst.stride)
         dst.spacing = getattr(src, "spacing", getattr(dst, "spacing", None))
 
-    def _viewer_to_vm(self, widget, _event=None):
-        if self._syncing:
+    def _viewer_to_vm(self, widget: OrthoViewWidget, _event=None):
+        if getattr(widget, "_grid_syncing", False):
             return
-        self._syncing = True
+        widget._grid_syncing = True
         try:
             self._copy_grid(
                 widget.viewer.grid,
                 widget.vm_container.viewer_model.grid,
             )
         finally:
-            self._syncing = False
+            widget._grid_syncing = False
 
-    def _vm_to_viewer(self, widget, _event=None):
-        if self._syncing:
+    def _vm_to_viewer(self, widget: OrthoViewWidget, _event=None):
+        if getattr(widget, "_grid_syncing", False):
             return
-        self._syncing = True
+        widget._grid_syncing = True
         try:
             self._copy_grid(
                 widget.vm_container.viewer_model.grid,
                 widget.viewer.grid,
             )
         finally:
-            self._syncing = False
+            widget._grid_syncing = False
 
     def set_grid_sync(self, state: int) -> None:
         """Enable/disable grid sync across all widgets."""
@@ -169,7 +166,7 @@ class GridWidget(QCheckBox):
 class ZoomWidget(QCheckBox):
     """Checkbox to sync/unsync camera zoom"""
 
-    def __init__(self, widgets=list[QWidget]):
+    def __init__(self, widgets=list[OrthoViewWidget]):
         super().__init__("Sync zoom")
         self.widgets = widgets
         self.stateChanged.connect(self.set_zoom_sync)
@@ -212,7 +209,7 @@ class ZoomWidget(QCheckBox):
 class CenterWidget(QCheckBox):
     """Checkbox to sync/unsync camera center for specific axes"""
 
-    def __init__(self, widgets=list[QWidget]):
+    def __init__(self, widgets=list[OrthoViewWidget]):
         super().__init__("Sync center")
         self.widgets = widgets
         self.stateChanged.connect(self.set_center_sync)

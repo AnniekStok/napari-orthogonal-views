@@ -282,6 +282,7 @@ class OrthoViewWidget(QWidget):
         if sync_axes is None:
             sync_axes = [0]
         self.sync_axes = sync_axes
+        self._grid_syncing = False
         self._block_center = False
         self._block_step = False
         self._layer_hooks = layer_hooks
