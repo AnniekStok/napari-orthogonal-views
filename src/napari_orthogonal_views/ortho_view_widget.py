@@ -2,6 +2,7 @@ import contextlib
 import warnings
 from collections.abc import Callable
 from types import MethodType
+from typing import Any
 
 import napari
 from napari.components.viewer_model import ViewerModel
@@ -33,21 +34,37 @@ def copy_layer(layer: Layer, name: str = "") -> Layer:
     return copied_layer
 
 
-def get_property_names(layer: Layer) -> list[str]:
-    """Return a list of all the layer properties (opacity, mode, ...) that emit events."""
+def get_property_names(obj) -> list[str]:
+    """Return a list of all properties that emit events on the given object.
 
-    klass = layer.__class__
+    Works for napari layers and nested objects like TextManager.
+    For layers: only includes settable properties.
+    For nested objects: includes public properties.
+    """
+
     emitter_list = []
-    for event_name, event_emitter in layer.events.emitters.items():
+
+    if not hasattr(obj, "events"):
+        return emitter_list
+
+    # Skip specific properties
+    skip_props = {"thumbnail", "name", "paint", "refresh", "extent"}
+
+    klass = obj.__class__
+    for event_name, event_emitter in obj.events.emitters.items():
         if isinstance(event_emitter, WarningEmitter):
             continue
-        if event_name in ("thumbnail", "name"):
+        if event_name in skip_props or event_name.startswith("_"):
             continue
-        if (
-            isinstance(getattr(klass, event_name, None), property)
-            and getattr(klass, event_name).fset is not None
-        ):
+
+        # For napari layers, check if it's a settable property
+        if isinstance(getattr(klass, event_name, None), property):
+            if getattr(klass, event_name).fset is not None:
+                emitter_list.append(event_name)
+        # For nested objects (like TextManager), include public properties
+        elif hasattr(obj, event_name):
             emitter_list.append(event_name)
+
     return emitter_list
 
 
@@ -87,11 +104,78 @@ class ViewerModelContainer:
             warnings.simplefilter("ignore")
             self.viewer_model._overlays["crosshairs"] = self.crosshair_overlay
 
+    def _setup_property_sync(
+        self,
+        source_obj: Any,
+        target_obj: Any,
+        prop_name: str,
+        forward: bool = True,
+        reverse: bool = True,
+    ) -> None:
+        """Set up bidirectional syncing for a single property between two objects.
+
+        Args:
+            source_obj (Layer or EventedModel): Object to sync from
+            target_obj (Layer or EventedModel): Object to sync to
+            prop_name (str): Name of the property to sync
+            forward (bool): whether to set up forward syncing
+            reverse (bool): whether to set up reverse syncing
+        """
+        if not hasattr(source_obj, "events"):
+            return
+        if not hasattr(source_obj.events, prop_name):
+            return
+
+        # Forward sync: source → target
+        if forward:
+
+            # Initial sync of property value
+            if prop_name != "current_size" and hasattr(target_obj, prop_name):
+                setattr(
+                    target_obj,
+                    prop_name,
+                    getattr(source_obj, prop_name),
+                )
+
+            getattr(source_obj.events, prop_name).connect(
+                own_partial(
+                    self._sync_property,
+                    prop_name,
+                    source_obj,
+                    target_obj,
+                )
+            )
+
+        # Reverse sync: target → source
+        if (
+            reverse
+            and hasattr(target_obj, "events")
+            and hasattr(target_obj.events, prop_name)
+        ):
+            getattr(target_obj.events, prop_name).connect(
+                own_partial(
+                    self._sync_property,
+                    prop_name,
+                    target_obj,
+                    source_obj,
+                )
+            )
+
     def _sync_layer_properties(
-        self, orig_layer: Layer, copied_layer: Layer
+        self,
+        orig_layer: Layer,
+        copied_layer: Layer,
+        nested_properties: list[str] | None = None,
     ) -> None:
         """Sync properties between orig_layer and copied_layer, applying optional
-        sync_filters."""
+        sync_filters. Can also sync nested object properties (e.g., layer.text).
+
+        Args:
+            orig_layer: Original layer to sync from
+            copied_layer: Copied layer to sync to
+            nested_properties: List of nested object attribute names to sync (e.g., ['text'])
+                Properties of these nested objects will be auto-discovered.
+        """
 
         def is_excluded(layer, prop, direction):
             """Check whether to skip syncing a property in a given direction."""
@@ -104,40 +188,41 @@ class ViewerModelContainer:
                         return True
             return False
 
+        # Sync main layer properties
         for property_name in get_property_names(orig_layer):
-            # Forward sync: orig_layer → copied_layer
-            if not is_excluded(orig_layer, property_name, "forward"):
+            forward_sync = not is_excluded(
+                orig_layer, property_name, "forward"
+            )
+            reverse_sync = not is_excluded(
+                orig_layer, property_name, "reverse"
+            )
+            self._setup_property_sync(
+                orig_layer,
+                copied_layer,
+                property_name,
+                forward_sync,
+                reverse_sync,
+            )
 
-                # first copy the value immediately
-                if (
-                    property_name != "current_size"
-                ):  # skip initially (special case)
-                    setattr(
-                        copied_layer,
-                        property_name,
-                        getattr(orig_layer, property_name),
-                    )
+        # Sync nested object properties (e.g., TextManager)
+        if nested_properties:
+            for nested_attr in nested_properties:
+                if hasattr(orig_layer, nested_attr) and hasattr(
+                    copied_layer, nested_attr
+                ):
+                    orig_nested = getattr(orig_layer, nested_attr)
+                    copied_nested = getattr(copied_layer, nested_attr)
 
-                # set up syncing
-                getattr(orig_layer.events, property_name).connect(
-                    own_partial(
-                        self._sync_property,
-                        property_name,
-                        orig_layer,
-                        copied_layer,
-                    )
-                )
+                    # Auto-discover properties of the nested object
+                    for prop_name in get_property_names(orig_nested):
+                        if not hasattr(orig_nested, prop_name) or not hasattr(
+                            copied_nested, prop_name
+                        ):
+                            continue
 
-            # Reverse sync: copied_layer → orig_layer
-            if not is_excluded(orig_layer, property_name, "reverse"):
-                getattr(copied_layer.events, property_name).connect(
-                    own_partial(
-                        self._sync_property,
-                        property_name,
-                        copied_layer,
-                        orig_layer,
-                    )
-                )
+                        self._setup_property_sync(
+                            orig_nested, copied_nested, prop_name
+                        )
 
     def _update_data(
         self, source: Labels, target: Labels, event: Event
@@ -184,78 +269,6 @@ class ViewerModelContainer:
         )
         self._block = False
 
-    def _sync_nested_object_properties(
-        self,
-        source_obj,
-        target_obj,
-        property_names: list[str],
-    ) -> None:
-        """Sync properties of a nested object (e.g., TextManager) by connecting to its
-        events. This provides unified property syncing for complex objects with their
-        own event system."""
-
-        for prop_name in property_names:
-            if not hasattr(source_obj, prop_name) or not hasattr(
-                source_obj, "events"
-            ):
-                continue
-
-            try:
-                # Initial sync of property value
-                if hasattr(target_obj, prop_name):
-                    setattr(
-                        target_obj,
-                        prop_name,
-                        getattr(source_obj, prop_name),
-                    )
-
-                # Set up bidirectional event syncing
-                if hasattr(source_obj.events, prop_name):
-                    # Forward: source → target
-                    getattr(source_obj.events, prop_name).connect(
-                        own_partial(
-                            self._sync_nested_property,
-                            prop_name,
-                            source_obj,
-                            target_obj,
-                        )
-                    )
-
-                    # Reverse: target → source
-                    getattr(target_obj.events, prop_name).connect(
-                        own_partial(
-                            self._sync_nested_property,
-                            prop_name,
-                            target_obj,
-                            source_obj,
-                        )
-                    )
-            except Exception:
-                pass
-
-    def _sync_nested_property(
-        self,
-        property_name: str,
-        source_obj,
-        target_obj,
-        event: Event,
-    ) -> None:
-        """Sync a single property of a nested object."""
-
-        if self._block:
-            return
-
-        self._block = True
-        try:
-            setattr(
-                target_obj,
-                property_name,
-                getattr(source_obj, property_name),
-            )
-        except Exception:
-            pass
-        self._block = False
-
     def set_layer_hooks(self, hooks: dict[type, list[Callable]]) -> None:
         """Replace current hook mapping."""
 
@@ -275,26 +288,11 @@ class ViewerModelContainer:
 
         orig_layer.events.name.connect(sync_name_wrapper)
 
-        # sync properties
-        self._sync_layer_properties(orig_layer, copied_layer)
-
-        if isinstance(orig_layer, Points):
-            # Sync TextManager properties using unified nested object syncing
-            self._sync_nested_object_properties(
-                orig_layer.text,
-                copied_layer.text,
-                [
-                    "string",
-                    "color",
-                    "visible",
-                    "size",
-                    "scaling",
-                    "blending",
-                    "anchor",
-                    "translation",
-                    "rotation",
-                ],
-            )
+        # sync properties (including nested properties like TextManager for Points)
+        nested_props = ["text"] if isinstance(orig_layer, Points) else None
+        self._sync_layer_properties(
+            orig_layer, copied_layer, nested_properties=nested_props
+        )
 
         if isinstance(orig_layer, Labels):
 
