@@ -250,13 +250,20 @@ class OrthoViewManager:
         self.main_controls_widget.controls_widget.zoom_widget.setChecked(state)
 
     def set_center_sync(self, state: bool = True) -> None:
-        """Activate the zoom syncing in the controls widget"""
+        """Activate the center syncing in the controls widget"""
         if not self.is_shown():
             return
 
         self.main_controls_widget.controls_widget.center_widget.setChecked(
             state
         )
+
+    def set_grid_sync(self, state: bool = True) -> None:
+        """Activate the grid syncing in the controls widget"""
+        if not self.is_shown():
+            return
+
+        self.main_controls_widget.controls_widget.grid_widget.setChecked(state)
 
     def register_layer_hook(self, layer_type: type, hook: Callable) -> None:
         """Register a hook to be applied to any matching layer type."""
@@ -357,7 +364,7 @@ class OrthoViewManager:
 
         self._shown = True
 
-        # activate checkboxes by default
+        # activate specific checkboxes by default (grid is excluded)
         if self.activate_checkboxes:
             self.set_cross_hairs(True)
             self.set_zoom_sync(True)
