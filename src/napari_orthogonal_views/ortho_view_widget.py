@@ -37,7 +37,7 @@ def copy_layer(layer: Layer, name: str = "") -> Layer:
 def get_property_names(obj: Any) -> list[str]:
     """Extract all property names that emit events on the given object.
     Args:
-        obj: a napari layer or an EventedModel object (like TextManager on layer.text)
+        obj: a napari layer or an EventedModel object (like TextManager via layer.text)
     Returns:
         A list of property names that emit events.
     """
@@ -112,14 +112,14 @@ class ViewerModelContainer:
 
         Args:
             source_obj: The source object to sync from. It can be a napari layer or an
-            EventedModel object (like TextManager on layer.text).
+            EventedModel object (like TextManager via layer.text).
             target_obj: The target object to sync to.
         """
 
         # Auto-discover properties using get_property_names
         property_names = get_property_names(source_obj)
 
-        def is_excluded(obj, prop, direction):
+        def is_excluded(obj: Any, prop: str, direction: str):
             """Check whether to skip syncing a property in a given direction."""
             for cls, rules in self.sync_filters.items():
                 if isinstance(obj, cls):
