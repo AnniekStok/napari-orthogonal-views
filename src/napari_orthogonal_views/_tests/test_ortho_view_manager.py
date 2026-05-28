@@ -65,6 +65,36 @@ def test_sync_camera(make_napari_viewer, qtbot):
     m.cleanup()
 
 
+def test_sync_grid(make_napari_viewer, qtbot):
+    """Test syncing of grid settings between viewer and orthoviews."""
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+    assert isinstance(m.right_widget, OrthoViewWidget)
+
+    m.set_grid_sync(True)
+    w = m.right_widget
+    grid_emitter = m.viewer.grid.events
+
+    # Check if any (emitter, handler) in _connections has this emitter
+    assert any(em == grid_emitter for em, _ in w._connections)
+
+    # Check that grid enabling is synced
+    viewer.grid.enabled = True
+    qtbot.waitUntil(
+        lambda: w.vm_container.viewer_model.grid.enabled is True,
+        timeout=1000,
+    )
+
+    # Check if the connection is removed
+    m.set_grid_sync(False)
+    assert not any(em == grid_emitter for em, _ in w._connections)
+
+    m.cleanup()
+
+
 def test_update_dims_order_with_4d_data(make_napari_viewer, qtbot):
     """Test that update_dims_order correctly updates dimension order and crosshair order."""
 
