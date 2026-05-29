@@ -6,7 +6,7 @@ from typing import Any
 
 import napari
 from napari.components.viewer_model import ViewerModel
-from napari.layers import Labels, Layer, Points
+from napari.layers import Labels, Layer
 from napari.qt import QtViewer
 from napari.utils.events import Event, EventEmitter
 from napari.utils.events.event import WarningEmitter
@@ -34,23 +34,36 @@ def copy_layer(layer: Layer, name: str = "") -> Layer:
     return copied_layer
 
 
-def get_property_names(obj) -> list[str]:
-    """Return a list of all properties that emit events on the given object.
+def get_property_names(
+    obj, include_nested: bool = True
+) -> list[str | dict[str, list[str]]]:
+    """Return properties that emit events on the given object.
 
-    Works for napari layers and nested objects like TextManager.
+    For Layer objects with include_nested=True, automatically discovers nested
+    EventedModel objects like TextManager and returns their properties as dicts: {nested_attr: [properties]}
+
     For layers: only includes settable properties.
     For nested objects: includes public properties.
+
+    Args:
+        obj: The object to analyze (Layer or nested EventedModel)
+        include_nested: If True and obj is a Layer, auto-discover nested EventedModels
+
+    Returns:
+        List mixing strings (property names) and dicts ({nested_attr: [properties]})
     """
 
     emitter_list = []
 
-    if not hasattr(obj, "events"):
+    if not hasattr(obj, "events") or not hasattr(obj.events, "emitters"):
         return emitter_list
 
     # Skip specific properties that cannot sync because they are not shown on ortho views
     skip_props = {"thumbnail", "name"}
 
     klass = obj.__class__
+    added_props = set()
+
     for event_name, event_emitter in obj.events.emitters.items():
         if isinstance(event_emitter, WarningEmitter):
             continue
@@ -61,9 +74,41 @@ def get_property_names(obj) -> list[str]:
         if isinstance(getattr(klass, event_name, None), property):
             if getattr(klass, event_name).fset is not None:
                 emitter_list.append(event_name)
+                added_props.add(event_name)
         # For non-layer objects (like TextManager), include public properties
         elif not isinstance(obj, Layer) and hasattr(obj, event_name):
             emitter_list.append(event_name)
+            added_props.add(event_name)
+
+    # Auto-discover nested EventedModels with syncable properties
+    if include_nested and isinstance(obj, Layer):
+        # find all public attributes
+        for attr_name in dir(obj):
+            # Skip private/special attributes and already-added properties
+            if (
+                attr_name.startswith("_")
+                or attr_name in skip_props
+                or attr_name in added_props
+                or attr_name.isupper()
+            ):  # Skip constants
+                continue
+
+            try:
+                attr = getattr(obj, attr_name)
+                # Check if this is a nested EventedModel (not a Layer, not a method)
+                if (
+                    hasattr(attr, "events")
+                    and not isinstance(attr, Layer)
+                    and not callable(attr)
+                ):
+                    nested_props = get_property_names(
+                        attr, include_nested=False
+                    )
+                    if nested_props:
+                        emitter_list.append({attr_name: nested_props})
+            except (AttributeError, TypeError, RuntimeError):
+                # Some properties might raise exceptions when accessed, skip them
+                continue
 
     return emitter_list
 
@@ -165,16 +210,13 @@ class ViewerModelContainer:
         self,
         orig_layer: Layer,
         copied_layer: Layer,
-        nested_properties: list[str] | None = None,
     ) -> None:
         """Sync properties between orig_layer and copied_layer, applying optional
-        sync_filters. Can also sync nested object properties (e.g., layer.text).
+        sync_filters. Automatically discovers and syncs nested object properties.
 
         Args:
             orig_layer: Original layer to sync from
             copied_layer: Copied layer to sync to
-            nested_properties: List of nested object attribute names to sync (e.g., ['text'])
-                Properties of these nested objects will be auto-discovered.
         """
 
         def is_excluded(layer, prop, direction):
@@ -188,40 +230,40 @@ class ViewerModelContainer:
                         return True
             return False
 
-        # Sync main layer properties
-        for property_name in get_property_names(orig_layer):
-            forward_sync = not is_excluded(
-                orig_layer, property_name, "forward"
-            )
-            reverse_sync = not is_excluded(
-                orig_layer, property_name, "reverse"
-            )
-            self._setup_property_sync(
-                orig_layer,
-                copied_layer,
-                property_name,
-                forward_sync,
-                reverse_sync,
-            )
+        # Sync layer properties (including nested properties automatically discovered)
+        for item in get_property_names(orig_layer):
+            if isinstance(item, dict):
+                # Handle nested properties: {nested_attr_name: [properties]}
+                for nested_attr, nested_props in item.items():
+                    if hasattr(orig_layer, nested_attr) and hasattr(
+                        copied_layer, nested_attr
+                    ):
+                        orig_nested = getattr(orig_layer, nested_attr)
+                        copied_nested = getattr(copied_layer, nested_attr)
 
-        # Sync nested object properties (e.g., TextManager)
-        if nested_properties:
-            for nested_attr in nested_properties:
-                if hasattr(orig_layer, nested_attr) and hasattr(
-                    copied_layer, nested_attr
-                ):
-                    orig_nested = getattr(orig_layer, nested_attr)
-                    copied_nested = getattr(copied_layer, nested_attr)
-
-                    # Auto-discover properties of the nested object
-                    for prop_name in get_property_names(orig_nested):
-                        if hasattr(orig_nested, prop_name) and hasattr(
-                            copied_nested, prop_name
-                        ):
-
-                            self._setup_property_sync(
-                                orig_nested, copied_nested, prop_name
-                            )
+                        for prop_name in nested_props:
+                            if hasattr(orig_nested, prop_name) and hasattr(
+                                copied_nested, prop_name
+                            ):
+                                self._setup_property_sync(
+                                    orig_nested, copied_nested, prop_name
+                                )
+            else:
+                # Handle regular layer properties
+                property_name = item
+                forward_sync = not is_excluded(
+                    orig_layer, property_name, "forward"
+                )
+                reverse_sync = not is_excluded(
+                    orig_layer, property_name, "reverse"
+                )
+                self._setup_property_sync(
+                    orig_layer,
+                    copied_layer,
+                    property_name,
+                    forward_sync,
+                    reverse_sync,
+                )
 
     def _update_data(
         self, source: Labels, target: Labels, event: Event
@@ -287,11 +329,8 @@ class ViewerModelContainer:
 
         orig_layer.events.name.connect(sync_name_wrapper)
 
-        # sync properties (including nested properties like TextManager for Points)
-        nested_props = ["text"] if isinstance(orig_layer, Points) else None
-        self._sync_layer_properties(
-            orig_layer, copied_layer, nested_properties=nested_props
-        )
+        # sync properties
+        self._sync_layer_properties(orig_layer, copied_layer)
 
         if isinstance(orig_layer, Labels):
 
