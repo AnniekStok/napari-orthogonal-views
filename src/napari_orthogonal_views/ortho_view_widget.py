@@ -47,8 +47,8 @@ def get_property_names(obj) -> list[str]:
     if not hasattr(obj, "events"):
         return emitter_list
 
-    # Skip specific properties
-    skip_props = {"thumbnail", "name", "paint", "refresh", "extent"}
+    # Skip specific properties that cannot sync because they are not shown on ortho views
+    skip_props = {"thumbnail", "name"}
 
     klass = obj.__class__
     for event_name, event_emitter in obj.events.emitters.items():
@@ -61,8 +61,8 @@ def get_property_names(obj) -> list[str]:
         if isinstance(getattr(klass, event_name, None), property):
             if getattr(klass, event_name).fset is not None:
                 emitter_list.append(event_name)
-        # For nested objects (like TextManager), include public properties
-        elif hasattr(obj, event_name):
+        # For non-layer objects (like TextManager), include public properties
+        elif not isinstance(obj, Layer) and hasattr(obj, event_name):
             emitter_list.append(event_name)
 
     return emitter_list
@@ -121,9 +121,9 @@ class ViewerModelContainer:
             forward (bool): whether to set up forward syncing
             reverse (bool): whether to set up reverse syncing
         """
-        if not hasattr(source_obj, "events"):
-            return
-        if not hasattr(source_obj.events, prop_name):
+        if not hasattr(source_obj, "events") or not hasattr(
+            source_obj.events, prop_name
+        ):
             return
 
         # Forward sync: source → target
@@ -215,14 +215,13 @@ class ViewerModelContainer:
 
                     # Auto-discover properties of the nested object
                     for prop_name in get_property_names(orig_nested):
-                        if not hasattr(orig_nested, prop_name) or not hasattr(
+                        if hasattr(orig_nested, prop_name) and hasattr(
                             copied_nested, prop_name
                         ):
-                            continue
 
-                        self._setup_property_sync(
-                            orig_nested, copied_nested, prop_name
-                        )
+                            self._setup_property_sync(
+                                orig_nested, copied_nested, prop_name
+                            )
 
     def _update_data(
         self, source: Labels, target: Labels, event: Event
