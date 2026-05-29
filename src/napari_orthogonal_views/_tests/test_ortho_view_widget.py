@@ -1,5 +1,5 @@
 import numpy as np
-from napari.layers import Image, Labels
+from napari.layers import Image, Labels, Points
 
 from napari_orthogonal_views.ortho_view_manager import (
     _get_manager,
@@ -137,6 +137,11 @@ def test_sync(make_napari_viewer, qtbot):
     labels.name = "test_labels_layer"
     viewer.add_layer(labels)
 
+    # test points layer
+    points = Points([[8, 10, 10, 10], [7, 8, 8, 8]])
+    points.name = "test_points_layer"
+    viewer.add_layer(points)
+
     # Update current step and check that the viewer models follow
     viewer.dims.current_step = (1, 1, 0, 0)
     assert viewer.dims.current_step == (1, 1, 0, 0)
@@ -172,6 +177,7 @@ def test_sync(make_napari_viewer, qtbot):
     viewer.layers[0].visible = False
     m.right_widget.vm_container.viewer_model.layers[1].opacity = 0.5
     m.bottom_widget.vm_container.viewer_model.layers[1].contour = 1
+    viewer.layers[2].text.size = 23  # change text size
 
     assert viewer.layers[0].visible is False
     assert m.right_widget.vm_container.viewer_model.layers[0].visible is False
@@ -182,6 +188,8 @@ def test_sync(make_napari_viewer, qtbot):
     assert viewer.layers[1].contour == 1
     assert m.right_widget.vm_container.viewer_model.layers[1].contour == 1
     assert m.bottom_widget.vm_container.viewer_model.layers[1].contour == 1
+    assert m.right_widget.vm_container.viewer_model.layers[2].text.size == 23
+    assert m.bottom_widget.vm_container.viewer_model.layers[2].text.size == 23
 
     # Sync data
     m.right_widget.vm_container.viewer_model.layers[1].data[
