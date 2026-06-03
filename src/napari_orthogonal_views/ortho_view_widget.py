@@ -1,6 +1,7 @@
 import contextlib
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from functools import partial
 from types import MethodType
 from typing import Any
 
@@ -9,7 +10,6 @@ from napari.components.viewer_model import ViewerModel
 from napari.layers import Labels, Layer
 from napari.qt import QtViewer
 from napari.utils.events import Event, EventEmitter
-from napari.utils.events.event import WarningEmitter
 from qtpy.QtWidgets import (
     QHBoxLayout,
     QWidget,
@@ -34,16 +34,35 @@ def copy_layer(layer: Layer, name: str = "") -> Layer:
     return copied_layer
 
 
+def _iter_event_signals(events_obj: Any) -> Iterator[tuple[str, Any]]:
+    """Yield (name, signal) pairs across napari versions. Napari 0.6.x has a dictionary
+    with emitters, but napari >= 0.7.x uses SignalGroups, so we need to check for both.
+    """
+    # napari 0.6.x: dict-like emitters
+    if hasattr(events_obj, "emitters"):
+        yield from events_obj.emitters.items()
+        return
+
+    # napari 0.7.x: SignalGroup (attribute-based)
+    for name in dir(events_obj):
+        if name.startswith("_"):
+            continue
+        sig = getattr(events_obj, name, None)
+        if hasattr(sig, "connect"):
+            yield name, sig
+
+
 def get_property_names(
-    obj, include_nested: bool = True
+    obj: Any, include_nested: bool = True
 ) -> list[str | dict[str, list[str]]]:
-    """Return properties that emit events on the given object.
+    """
+    Return properties that emit events on the given object.
 
     For Layer objects with include_nested=True, automatically discovers nested
     EventedModel objects like TextManager and returns their properties as dicts: {nested_attr: [properties]}
 
-    For layers: only includes settable properties.
-    For nested objects: includes public properties.
+    For layers: only include settable properties.
+    For nested objects: include public properties.
 
     Args:
         obj: The object to analyze (Layer or nested EventedModel)
@@ -53,79 +72,64 @@ def get_property_names(
         List mixing strings (property names) and dicts ({nested_attr: [properties]})
     """
 
-    emitter_list = []
+    emitter_list: list[str | dict[str, list[str]]] = []
 
-    if not hasattr(obj, "events") or not hasattr(obj.events, "emitters"):
+    if not hasattr(obj, "events"):
         return emitter_list
 
     # Skip specific properties that cannot sync because they are not shown on ortho views
     skip_props = {"thumbnail", "name"}
-
-    klass = obj.__class__
     added_props = set()
 
-    for event_name, event_emitter in obj.events.emitters.items():
-        if isinstance(event_emitter, WarningEmitter):
-            continue
+    klass = obj.__class__
+
+    # Collect signal-backed properties
+    for event_name, _signal in _iter_event_signals(obj.events):
+
         if event_name in skip_props or event_name.startswith("_"):
             continue
 
-        # For napari layers, check if it's a settable property
-        if isinstance(getattr(klass, event_name, None), property):
-            if getattr(klass, event_name).fset is not None:
+        if event_name in added_props:
+            continue
+
+        # For napari layers only include real settable properties
+        klass_attr = getattr(klass, event_name, None)
+        if isinstance(klass_attr, property):
+            if klass_attr.fset is not None:
                 emitter_list.append(event_name)
                 added_props.add(event_name)
-        # For non-layer objects (like TextManager), include public properties
+
+        # Non-Layer EventedModel-like objects
         elif not isinstance(obj, Layer) and hasattr(obj, event_name):
             emitter_list.append(event_name)
             added_props.add(event_name)
 
-    # Auto-discover nested EventedModels with syncable properties
+    # Nested EventedModels
+
     if include_nested and isinstance(obj, Layer):
         # find all public attributes
         for attr_name in dir(obj):
-            # Skip private/special attributes and already-added properties
+            # skip  private attributes, special cases, already added properties and constants
             if (
                 attr_name.startswith("_")
                 or attr_name in skip_props
                 or attr_name in added_props
                 or attr_name.isupper()
-            ):  # Skip constants
+            ):
                 continue
 
-            try:
-                attr = getattr(obj, attr_name)
-                # Check if this is a nested EventedModel (not a Layer, not a method)
-                if (
-                    hasattr(attr, "events")
-                    and not isinstance(attr, Layer)
-                    and not callable(attr)
-                ):
-                    nested_props = get_property_names(
-                        attr, include_nested=False
-                    )
-                    if nested_props:
-                        emitter_list.append({attr_name: nested_props})
-            except (AttributeError, TypeError, RuntimeError):
-                # Some properties might raise exceptions when accessed, skip them
-                continue
+            attr = getattr(obj, attr_name)
 
+            # detect nested evented objects
+            if (
+                hasattr(attr, "events")
+                and not isinstance(attr, Layer)
+                and not callable(attr)
+            ):
+                nested_props = get_property_names(attr, include_nested=False)
+                if nested_props:
+                    emitter_list.append({attr_name: nested_props})
     return emitter_list
-
-
-class own_partial:
-    """
-    Workaround for deepcopy not copying partial functions
-    (Qt widgets are not serializable)
-    """
-
-    def __init__(self, func, *args, **kwargs):
-        self.func = func
-        self.args = args
-        self.kwargs = kwargs
-
-    def __call__(self, *args, **kwargs):
-        return self.func(*(self.args + args), **{**self.kwargs, **kwargs})
 
 
 class ViewerModelContainer:
@@ -171,10 +175,23 @@ class ViewerModelContainer:
         ):
             return
 
-        # Forward sync: source → target
+        def get_signal(obj: Any, name: str) -> Any | None:
+            if not hasattr(obj, "events"):
+                return None
+
+            events = obj.events
+
+            # 0.6.x
+            if hasattr(events, "emitters"):
+                return events.emitters.get(name, None)
+
+            # 0.7.x
+            return getattr(events, name, None)
+
+        # Forward sync from source -> target
         if forward:
 
-            # Initial sync of property value
+            # initial sync
             if prop_name != "current_size" and hasattr(target_obj, prop_name):
                 setattr(
                     target_obj,
@@ -182,29 +199,32 @@ class ViewerModelContainer:
                     getattr(source_obj, prop_name),
                 )
 
-            getattr(source_obj.events, prop_name).connect(
-                own_partial(
-                    self._sync_property,
-                    prop_name,
-                    source_obj,
-                    target_obj,
+            signal = get_signal(source_obj, prop_name)
+
+            if signal is not None and hasattr(signal, "connect"):
+                signal.connect(
+                    partial(
+                        self._sync_property,
+                        prop_name,
+                        source_obj,
+                        target_obj,
+                    )
                 )
-            )
 
         # Reverse sync: target → source
-        if (
-            reverse
-            and hasattr(target_obj, "events")
-            and hasattr(target_obj.events, prop_name)
-        ):
-            getattr(target_obj.events, prop_name).connect(
-                own_partial(
-                    self._sync_property,
-                    prop_name,
-                    target_obj,
-                    source_obj,
+        if reverse and hasattr(target_obj, "events"):
+
+            signal = get_signal(target_obj, prop_name)
+
+            if signal is not None and hasattr(signal, "connect"):
+                signal.connect(
+                    partial(
+                        self._sync_property,
+                        prop_name,
+                        target_obj,
+                        source_obj,
+                    )
                 )
-            )
 
     def _sync_layer_properties(
         self,
@@ -408,6 +428,7 @@ class OrthoViewWidget(QWidget):
         if sync_axes is None:
             sync_axes = [0]
         self.sync_axes = sync_axes
+        self._grid_syncing = False
         self._block_center = False
         self._block_step = False
         self._layer_hooks = layer_hooks
