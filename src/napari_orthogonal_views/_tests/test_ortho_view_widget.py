@@ -177,7 +177,10 @@ def test_sync(make_napari_viewer, qtbot):
     viewer.layers[0].visible = False
     m.right_widget.vm_container.viewer_model.layers[1].opacity = 0.5
     m.bottom_widget.vm_container.viewer_model.layers[1].contour = 1
-    viewer.layers[2].text.size = 23  # change text size
+    viewer.layers[2].text.size = 23  # change text size (nested property)
+    viewer.layers[0].bounding_box.visible = (
+        True  # change bounding box visibility
+    )
 
     assert viewer.layers[0].visible is False
     assert m.right_widget.vm_container.viewer_model.layers[0].visible is False
@@ -188,8 +191,17 @@ def test_sync(make_napari_viewer, qtbot):
     assert viewer.layers[1].contour == 1
     assert m.right_widget.vm_container.viewer_model.layers[1].contour == 1
     assert m.bottom_widget.vm_container.viewer_model.layers[1].contour == 1
-    assert m.right_widget.vm_container.viewer_model.layers[2].text.size == 23
     assert m.bottom_widget.vm_container.viewer_model.layers[2].text.size == 23
+    assert m.right_widget.vm_container.viewer_model.layers[2].text.size == 23
+    assert viewer.layers[0].bounding_box.visible is True
+    assert (
+        m.bottom_widget.vm_container.viewer_model.layers[
+            0
+        ].bounding_box.visible
+        is True
+    )
+    # below line still fails in napari 0.7.0
+    # assert m.right_widget.vm_container.viewer_model.layers[0].bounding_box.visible is True
 
     # Sync data
     m.right_widget.vm_container.viewer_model.layers[1].data[
