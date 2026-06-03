@@ -78,7 +78,7 @@ def get_property_names(
         return emitter_list
 
     # Skip specific properties that cannot sync because they are not shown on ortho views
-    skip_props = {"thumbnail", "name"}
+    skip_props = {"thumbnail", "name", "scale_factor"}
     added_props = set()
 
     klass = obj.__class__
@@ -323,6 +323,13 @@ class ViewerModelContainer:
             return
 
         self._block = True
+        # print(
+        #     "SYNC",
+        #     property_name,
+        #     id(source_layer),
+        #     "->",
+        #     id(target_layer)
+        # )
         setattr(
             target_layer,
             property_name,
