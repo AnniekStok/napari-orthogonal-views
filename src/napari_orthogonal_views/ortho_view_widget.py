@@ -9,6 +9,7 @@ import napari
 from napari.components.viewer_model import ViewerModel
 from napari.layers import Labels, Layer
 from napari.qt import QtViewer
+from napari.utils.colormaps import Colormap
 from napari.utils.events import Event, EventEmitter
 from qtpy.QtWidgets import (
     QHBoxLayout,
@@ -56,20 +57,30 @@ def _sync_guard(*args: Any, **kwargs: Any) -> None:
     """
 
 
-def _connect_sync_signal(signal: Any, handler: Callable) -> None:
+def _connect_sync_signal(
+    signal: Any, handler: Callable
+) -> list[tuple[Any, Callable]]:
     """Connect ``handler`` to ``signal``, guarding against psygnal's mid-emit skip.
 
     For psygnal signals (napari >= 0.7) a throwaway :func:`_sync_guard` slot is
     connected first so it, rather than the real ``handler``, absorbs the slot that
     napari skips when it disconnects its lazy overlay callback during emission.
+
+    Returns the ``(signal, slot)`` pairs that were connected so the caller can
+    track them and disconnect them again during cleanup.
     """
+
+    connected: list[tuple[Any, Callable]] = []
 
     # psygnal SignalInstance exposes ``_slots``; napari 0.6.x EventEmitter does not
     # and is unaffected by the skip, so the guard is psygnal-only.
     if hasattr(signal, "_slots"):
         with contextlib.suppress(TypeError, ValueError):
             signal.connect(_sync_guard, unique=True, check_nargs=False)
+            connected.append((signal, _sync_guard))
     signal.connect(handler)
+    connected.append((signal, handler))
+    return connected
 
 
 def _iter_event_signals(events_obj: Any) -> Iterator[tuple[str, Any]]:
@@ -158,6 +169,11 @@ def get_property_names(
 
             attr = getattr(obj, attr_name)
 
+            # Skip Colormap objects (points.face_colormap, border_colormap) because these
+            # cannot sync reliably. Image layers should not be affected by this.
+            if isinstance(attr, Colormap):
+                continue
+
             # detect nested evented objects
             if (
                 hasattr(attr, "events")
@@ -183,6 +199,13 @@ class ViewerModelContainer:
         self._layer_hooks: dict[type, list[Callable]] = {}
         self.sync_filters = sync_filters or {}
 
+        # Track every (signal, slot) connection made on the *original* layers (and
+        # their nested objects) per layer, keyed by id(orig_layer), so they can be
+        # disconnected again when the layer is removed or the widget is torn down.
+        # Without this the connections outlive the layer and keep mutating (and
+        # referencing) the orphaned copied layer.
+        self._layer_connections: dict[int, list[tuple[Any, Callable]]] = {}
+
         # Add crosshair overlays (initially invisible)
         self.crosshair_overlay = CrosshairOverlay(
             blending="translucent_no_depth", axis_order=order
@@ -198,6 +221,7 @@ class ViewerModelContainer:
         prop_name: str,
         forward: bool = True,
         reverse: bool = True,
+        bucket: list[tuple[Any, Callable]] | None = None,
     ) -> None:
         """Set up bidirectional syncing for a single property between two objects.
 
@@ -207,6 +231,8 @@ class ViewerModelContainer:
             prop_name (str): Name of the property to sync
             forward (bool): whether to set up forward syncing
             reverse (bool): whether to set up reverse syncing
+            bucket (list): optional list to record created (signal, slot)
+                connections in, so they can be disconnected on cleanup.
         """
         if not hasattr(source_obj, "events") or not hasattr(
             source_obj.events, prop_name
@@ -240,7 +266,7 @@ class ViewerModelContainer:
             signal = get_signal(source_obj, prop_name)
 
             if signal is not None and hasattr(signal, "connect"):
-                _connect_sync_signal(
+                made = _connect_sync_signal(
                     signal,
                     partial(
                         self._sync_property,
@@ -249,6 +275,8 @@ class ViewerModelContainer:
                         target_obj,
                     ),
                 )
+                if bucket is not None:
+                    bucket.extend(made)
 
         # Reverse sync: target → source
         if reverse and hasattr(target_obj, "events"):
@@ -256,7 +284,7 @@ class ViewerModelContainer:
             signal = get_signal(target_obj, prop_name)
 
             if signal is not None and hasattr(signal, "connect"):
-                _connect_sync_signal(
+                made = _connect_sync_signal(
                     signal,
                     partial(
                         self._sync_property,
@@ -265,11 +293,14 @@ class ViewerModelContainer:
                         source_obj,
                     ),
                 )
+                if bucket is not None:
+                    bucket.extend(made)
 
     def _sync_layer_properties(
         self,
         orig_layer: Layer,
         copied_layer: Layer,
+        bucket: list[tuple[Any, Callable]] | None = None,
     ) -> None:
         """Sync properties between orig_layer and copied_layer, applying optional
         sync_filters. Automatically discovers and syncs nested object properties.
@@ -277,6 +308,8 @@ class ViewerModelContainer:
         Args:
             orig_layer: Original layer to sync from
             copied_layer: Copied layer to sync to
+            bucket (list): optional list to record created (signal, slot)
+                connections in, so they can be disconnected on cleanup.
         """
 
         def is_excluded(layer, prop, direction):
@@ -306,7 +339,10 @@ class ViewerModelContainer:
                                 copied_nested, prop_name
                             ):
                                 self._setup_property_sync(
-                                    orig_nested, copied_nested, prop_name
+                                    orig_nested,
+                                    copied_nested,
+                                    prop_name,
+                                    bucket=bucket,
                                 )
             else:
                 # Handle regular layer properties
@@ -323,6 +359,7 @@ class ViewerModelContainer:
                     property_name,
                     forward_sync,
                     reverse_sync,
+                    bucket=bucket,
                 )
 
     def _update_data(
@@ -363,13 +400,6 @@ class ViewerModelContainer:
             return
 
         self._block = True
-        # print(
-        #     "SYNC",
-        #     property_name,
-        #     id(source_layer),
-        #     "->",
-        #     id(target_layer)
-        # )
         setattr(
             target_layer,
             property_name,
@@ -390,14 +420,19 @@ class ViewerModelContainer:
         )
         copied_layer = self.viewer_model.layers[orig_layer.name]
 
+        # Collect every connection made for this layer so it can be cleaned up
+        # again when the layer is removed (see remove_layer_connections).
+        bucket = self._layer_connections.setdefault(id(orig_layer), [])
+
         # sync name
         def sync_name_wrapper(event):
             return self._sync_name(orig_layer, copied_layer, event)
 
         orig_layer.events.name.connect(sync_name_wrapper)
+        bucket.append((orig_layer.events.name, sync_name_wrapper))
 
         # sync properties
-        self._sync_layer_properties(orig_layer, copied_layer)
+        self._sync_layer_properties(orig_layer, copied_layer, bucket)
 
         if isinstance(orig_layer, Labels):
 
@@ -433,24 +468,50 @@ class ViewerModelContainer:
             # event, because we need it in order to invoke syncing between the different
             # viewers. (Paint event does not trigger 'data' event by itself).
             # We do not need to connect to the eraser and fill bucket separately.
-            copied_layer.events.paint.connect(
-                lambda event: self._update_data(
-                    source=copied_layer, target=orig_layer, event=event
-                )  # copy data from copied_layer to orig_layer (orig_layer emits signal,
+            def copied_paint(event):
+                # copy data from copied_layer to orig_layer (orig_layer emits signal,
                 # which triggers update on other viewer models, if present)
-            )
-            orig_layer.events.paint.connect(
-                lambda event: self._update_data(
-                    source=orig_layer, target=copied_layer, event=event
-                )  # copy data from orig_layer to copied_layer (copied_layer emits signal
+                return self._update_data(
+                    source=copied_layer, target=orig_layer, event=event
+                )
+
+            def orig_paint(event):
+                # copy data from orig_layer to copied_layer (copied_layer emits signal
                 # but we don't process it)
-            )
+                return self._update_data(
+                    source=orig_layer, target=copied_layer, event=event
+                )
+
+            copied_layer.events.paint.connect(copied_paint)
+            orig_layer.events.paint.connect(orig_paint)
+            bucket.append((copied_layer.events.paint, copied_paint))
+            bucket.append((orig_layer.events.paint, orig_paint))
 
         # Special hooks based on layer type
         for hook_type, hooks in self._layer_hooks.items():
             if isinstance(orig_layer, hook_type):
                 for hook in hooks:
                     hook(orig_layer, copied_layer)
+
+    def remove_layer_connections(self, orig_layer: Layer) -> None:
+        """Disconnect and forget every sync connection made for ``orig_layer``.
+
+        Called when a layer is removed from the main viewer so the connections on
+        the original layer (and its nested objects) do not outlive the copied layer
+        and keep mutating/referencing it.
+        """
+
+        for signal, handler in self._layer_connections.pop(id(orig_layer), []):
+            with contextlib.suppress(ValueError, RuntimeError, TypeError):
+                signal.disconnect(handler)
+
+    def disconnect_all(self) -> None:
+        """Disconnect every tracked sync connection across all layers."""
+
+        for key in list(self._layer_connections):
+            for signal, handler in self._layer_connections.pop(key, []):
+                with contextlib.suppress(ValueError, RuntimeError, TypeError):
+                    signal.disconnect(handler)
 
 
 class OrthoViewWidget(QWidget):
@@ -613,6 +674,10 @@ class OrthoViewWidget(QWidget):
     def _layer_removed(self, event: Event) -> None:
         """Remove layer in all viewer models"""
 
+        # Disconnect the sync connections made on the original layer so they don't
+        # outlive the removed copied layer.
+        self.vm_container.remove_layer_connections(event.value)
+
         layer_name = event.value.name
         if layer_name in self.vm_container.viewer_model.layers:
             self.vm_container.viewer_model.layers.pop(layer_name)
@@ -724,6 +789,10 @@ class OrthoViewWidget(QWidget):
                 sig.disconnect(handler)
 
         self._connections.clear()
+
+        # Also disconnect the per-layer sync connections made on the original
+        # layers (and their nested objects), which are tracked separately.
+        self.vm_container.disconnect_all()
 
 
 def check_center(model: ViewerModel, coords: list[int]) -> tuple[int, int]:

@@ -5,7 +5,10 @@ from napari_orthogonal_views.ortho_view_manager import (
     _get_manager,
     show_orthogonal_views,
 )
-from napari_orthogonal_views.ortho_view_widget import OrthoViewWidget
+from napari_orthogonal_views.ortho_view_widget import (
+    OrthoViewWidget,
+    get_property_names,
+)
 
 
 def test_add_move_remove_layer(make_napari_viewer, qtbot):
@@ -305,6 +308,95 @@ def test_sync_repeated_toggles(make_napari_viewer, qtbot):
         bottom(0).bounding_box.visible = rep % 2 == 0
         assert img.bounding_box.visible is bottom(0).bounding_box.visible
         assert right(0).bounding_box.visible is bottom(0).bounding_box.visible
+
+    m.cleanup()
+
+
+def test_colormap_sync(make_napari_viewer, qtbot):
+    """Colormap syncing.
+
+    Image/Labels expose ``colormap`` as a settable layer property with an
+    ``events.colormap`` emitter, so it is synced as a flat, whole-object property
+    (forward and reverse), even though napari replaces the whole Colormap object
+    on assignment.
+
+    Points ``face_colormap`` / ``border_colormap`` are nested Colormap value
+    objects that napari replaces wholesale *without* emitting any layer-level
+    event. Connecting to the current colormap object's field events would silently
+    go stale on replacement, so they are deliberately *excluded* from nested
+    discovery rather than synced unreliably.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    # Points face/border colormaps must NOT be discovered as nested objects.
+    points = Points([[1, 1, 1], [2, 2, 2]])
+    nested = [
+        list(d.keys())[0]
+        for d in get_property_names(points)
+        if isinstance(d, dict)
+    ]
+    assert "face_colormap" not in nested
+    assert "border_colormap" not in nested
+
+    # Image colormap is a flat property and must still sync both ways.
+    img = Image(np.zeros((5, 20, 20)))
+    img.name = "img"
+    viewer.add_layer(img)
+
+    right = m.right_widget.vm_container.viewer_model.layers[0]
+    bottom = m.bottom_widget.vm_container.viewer_model.layers[0]
+
+    img.colormap = "magma"
+    assert right.colormap.name == "magma"
+    assert bottom.colormap.name == "magma"
+
+    # reverse: setting on a copy propagates to orig and the other copy
+    right.colormap = "viridis"
+    assert img.colormap.name == "viridis"
+    assert bottom.colormap.name == "viridis"
+
+    m.cleanup()
+
+
+def test_sync_connections_cleaned_up(make_napari_viewer, qtbot):
+    """Removing a layer must disconnect the sync connections made on the original
+    layer, so they do not outlive the removed copied layer and keep mutating it.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    img = Image(np.zeros((5, 20, 20)))
+    img.name = "img"
+    viewer.add_layer(img)
+
+    container = m.right_widget.vm_container
+    copied = container.viewer_model.layers[0]  # keep a reference to the copy
+
+    # Connections were tracked for this layer.
+    assert id(img) in container._layer_connections
+    assert len(container._layer_connections[id(img)]) > 0
+
+    # Remove the layer; tracked connections must be dropped.
+    viewer.layers.remove(img)
+    assert id(img) not in container._layer_connections
+    assert "img" not in container.viewer_model.layers
+
+    # Mutating the (still referenced) original layer must NOT touch the orphaned
+    # copied layer anymore.
+    copied.opacity = 1.0
+    copied.bounding_box.visible = False
+    img.opacity = 0.25
+    img.bounding_box.visible = True
+
+    assert copied.opacity == 1.0
+    assert copied.bounding_box.visible is False
 
     m.cleanup()
 
