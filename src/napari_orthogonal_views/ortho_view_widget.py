@@ -34,6 +34,44 @@ def copy_layer(layer: Layer, name: str = "") -> Layer:
     return copied_layer
 
 
+def _sync_guard(*args: Any, **kwargs: Any) -> None:
+    """No-op placeholder slot used to protect real sync handlers from being skipped.
+
+    napari's ``VispyCanvas._update_layer_overlays`` connects itself to an overlay's
+    ``visible`` event so it can lazily build the vispy visual the first time the
+    overlay becomes visible. At that transition it *disconnects itself from inside*
+    the ``visible`` event's emission.
+
+    Under psygnal (napari >= 0.7) removing a slot while the signal is emitting shifts
+    the remaining slots down, so the slot immediately following napari's callback is
+    silently skipped for that one emission. Because the ortho views connect their
+    forward-sync handlers right after napari's callback, the first-connected view
+    (``right_widget``) would miss the very first ``bounding_box.visible`` change while
+    the second-connected view (``bottom_widget``) still received it.
+
+    Connecting this no-op right after napari's callback means the guard absorbs the
+    skip instead of a real sync handler. napari <= 0.6.x used the old EventEmitter,
+    which does not have this behaviour, so the guard is only attached to psygnal
+    signals.
+    """
+
+
+def _connect_sync_signal(signal: Any, handler: Callable) -> None:
+    """Connect ``handler`` to ``signal``, guarding against psygnal's mid-emit skip.
+
+    For psygnal signals (napari >= 0.7) a throwaway :func:`_sync_guard` slot is
+    connected first so it, rather than the real ``handler``, absorbs the slot that
+    napari skips when it disconnects its lazy overlay callback during emission.
+    """
+
+    # psygnal SignalInstance exposes ``_slots``; napari 0.6.x EventEmitter does not
+    # and is unaffected by the skip, so the guard is psygnal-only.
+    if hasattr(signal, "_slots"):
+        with contextlib.suppress(TypeError, ValueError):
+            signal.connect(_sync_guard, unique=True, check_nargs=False)
+    signal.connect(handler)
+
+
 def _iter_event_signals(events_obj: Any) -> Iterator[tuple[str, Any]]:
     """Yield (name, signal) pairs across napari versions. Napari 0.6.x has a dictionary
     with emitters, but napari >= 0.7.x uses SignalGroups, so we need to check for both.
@@ -202,13 +240,14 @@ class ViewerModelContainer:
             signal = get_signal(source_obj, prop_name)
 
             if signal is not None and hasattr(signal, "connect"):
-                signal.connect(
+                _connect_sync_signal(
+                    signal,
                     partial(
                         self._sync_property,
                         prop_name,
                         source_obj,
                         target_obj,
-                    )
+                    ),
                 )
 
         # Reverse sync: target → source
@@ -217,13 +256,14 @@ class ViewerModelContainer:
             signal = get_signal(target_obj, prop_name)
 
             if signal is not None and hasattr(signal, "connect"):
-                signal.connect(
+                _connect_sync_signal(
+                    signal,
                     partial(
                         self._sync_property,
                         prop_name,
                         target_obj,
                         source_obj,
-                    )
+                    ),
                 )
 
     def _sync_layer_properties(

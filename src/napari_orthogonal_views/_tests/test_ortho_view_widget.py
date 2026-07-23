@@ -200,8 +200,10 @@ def test_sync(make_napari_viewer, qtbot):
         ].bounding_box.visible
         is True
     )
-    # below line still fails in napari 0.7.0
-    # assert m.right_widget.vm_container.viewer_model.layers[0].bounding_box.visible is True
+    assert (
+        m.right_widget.vm_container.viewer_model.layers[0].bounding_box.visible
+        is True
+    )
 
     # Sync data
     m.right_widget.vm_container.viewer_model.layers[1].data[
@@ -216,6 +218,93 @@ def test_sync(make_napari_viewer, qtbot):
     np.testing.assert_array_equal(
         m.bottom_widget.vm_container.viewer_model.layers[1].data, expected
     )
+
+    m.cleanup()
+
+
+def test_sync_repeated_toggles(make_napari_viewer, qtbot):
+    """Regression test for the psygnal mid-emit slot skip (napari >= 0.7).
+
+    napari's VispyCanvas._update_layer_overlays disconnects itself from an
+    overlay's ``visible`` event while that event is emitting (the first time the
+    overlay becomes visible). Under psygnal this shifts the remaining slots and
+    silently skips the slot right after napari's callback, which is the
+    first-connected view's (right_widget) sync handler. A no-op guard slot is
+    connected first to absorb that skip.
+
+    This test verifies that:
+        - Normal (non-overlay) properties are *not* absorbed by the guard.
+        - Overlay ``visible`` syncs on the first toggle for *both* views.
+        - Syncing remains correct across repeated toggles, in both the
+          forward (orig -> copies) and reverse (a copy -> orig + other copy)
+          directions.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+    assert isinstance(m.right_widget, OrthoViewWidget)
+
+    img = Image(np.zeros((5, 20, 20, 20)))
+    img.name = "img"
+    viewer.add_layer(img)
+
+    labels = Labels(np.zeros((5, 20, 20, 20), dtype=np.uint8))
+    labels.name = "labels"
+    viewer.add_layer(labels)
+
+    points = Points([[1, 1, 1, 1], [2, 2, 2, 2]])
+    points.name = "points"
+    viewer.add_layer(points)
+
+    def right(i):
+        return m.right_widget.vm_container.viewer_model.layers[i]
+
+    def bottom(i):
+        return m.bottom_widget.vm_container.viewer_model.layers[i]
+
+    for rep in range(4):
+        # --- forward sync of normal properties (must not be absorbed) ---
+        img.opacity = 0.1 + 0.2 * rep
+        assert right(0).opacity == img.opacity
+        assert bottom(0).opacity == img.opacity
+
+        img.visible = rep % 2 == 0
+        assert right(0).visible is img.visible
+        assert bottom(0).visible is img.visible
+
+        labels.contour = rep
+        assert right(1).contour == labels.contour
+        assert bottom(1).contour == labels.contour
+
+        points.text.size = 10 + rep  # nested property
+        assert right(2).text.size == points.text.size
+        assert bottom(2).text.size == points.text.size
+
+        # --- reverse sync from the right copy -> orig + bottom copy ---
+        right(0).gamma = 0.5 + 0.1 * rep
+        assert img.gamma == right(0).gamma
+        assert bottom(0).gamma == right(0).gamma
+
+        # --- overlay visible: forward, must sync for BOTH views on toggle ---
+        img.bounding_box.visible = rep % 2 == 0
+        assert (
+            right(0).bounding_box.visible is img.bounding_box.visible
+        ), f"right bb.visible not synced (forward, rep {rep})"
+        assert (
+            bottom(0).bounding_box.visible is img.bounding_box.visible
+        ), f"bottom bb.visible not synced (forward, rep {rep})"
+
+        # --- overlay visible: reverse from right copy ---
+        right(0).bounding_box.visible = rep % 2 == 1
+        assert img.bounding_box.visible is right(0).bounding_box.visible
+        assert bottom(0).bounding_box.visible is right(0).bounding_box.visible
+
+        # --- overlay visible: reverse from bottom copy ---
+        bottom(0).bounding_box.visible = rep % 2 == 0
+        assert img.bounding_box.visible is bottom(0).bounding_box.visible
+        assert right(0).bounding_box.visible is bottom(0).bounding_box.visible
 
     m.cleanup()
 
