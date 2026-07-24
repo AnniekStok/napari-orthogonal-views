@@ -401,6 +401,51 @@ def test_sync_connections_cleaned_up(make_napari_viewer, qtbot):
     m.cleanup()
 
 
+def test_points_selection_sync(make_napari_viewer, qtbot):
+    """Point ``selected_data`` must sync as a whole set in order to work for both single
+    and multi-selections.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    points = Points([[1, 1], [2, 2], [3, 3], [4, 4]])
+    viewer.add_layer(points)
+
+    right = m.right_widget.vm_container.viewer_model.layers[0]
+    bottom = m.bottom_widget.vm_container.viewer_model.layers[0]
+
+    def selections():
+        return (
+            set(points.selected_data),
+            set(right.selected_data),
+            set(bottom.selected_data),
+        )
+
+    # single selection on the main viewer
+    points.selected_data = {1}
+    assert selections() == ({1}, {1}, {1})
+
+    # multi selection on the main viewer (this is what used to be dropped)
+    points.selected_data = {0, 2, 3}
+    assert selections() == ({0, 2, 3}, {0, 2, 3}, {0, 2, 3})
+
+    # multi selection made in an ortho view propagates back to the main viewer
+    right.selected_data = {0, 1}
+    assert selections() == ({0, 1}, {0, 1}, {0, 1})
+
+    bottom.selected_data = {1, 2, 3}
+    assert selections() == ({1, 2, 3}, {1, 2, 3}, {1, 2, 3})
+
+    # clearing the selection also syncs
+    points.selected_data = set()
+    assert selections() == (set(), set(), set())
+
+    m.cleanup()
+
+
 def test_layer_hook(make_napari_viewer, qtbot):
     """Test setting optional custom layer hooks. This is to forward specific
     events/outcomes to the original layer (could be a subclass) for further downstream

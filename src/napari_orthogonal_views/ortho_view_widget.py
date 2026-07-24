@@ -7,10 +7,11 @@ from typing import Any
 
 import napari
 from napari.components.viewer_model import ViewerModel
-from napari.layers import Labels, Layer
+from napari.layers import Labels, Layer, Points
 from napari.qt import QtViewer
 from napari.utils.colormaps import Colormap
 from napari.utils.events import Event, EventEmitter
+from psygnal.containers import Selection
 from qtpy.QtWidgets import (
     QHBoxLayout,
     QWidget,
@@ -170,8 +171,10 @@ def get_property_names(
             attr = getattr(obj, attr_name)
 
             # Skip Colormap objects (points.face_colormap, border_colormap) because these
-            # cannot sync reliably. Image layers should not be affected by this.
-            if isinstance(attr, Colormap):
+            # cannot sync reliably. Image layers should not be affected by this. Also skip
+            # the Points 'selected_data' selection, because it only syncs the 'active'
+            # element, which does not work for multi-selection.
+            if isinstance(attr, Colormap | Selection):
                 continue
 
             # detect nested evented objects
@@ -407,6 +410,23 @@ class ViewerModelContainer:
         )
         self._block = False
 
+    def _sync_selected_data(
+        self, source_layer: Points, target_layer: Points, event: Event
+    ) -> None:
+        """Sync the full point selection between two Points layers.
+
+        ``selected_data`` is a Selection (an evented set). The whole set has to be synced,
+        rather than its single ``active`` element, because ``active`` is None as
+        soon as more than one point is selected, which would drop multi-selections.
+        """
+
+        if self._block:
+            return
+
+        self._block = True
+        target_layer.selected_data = set(source_layer.selected_data)
+        self._block = False
+
     def set_layer_hooks(self, hooks: dict[type, list[Callable]]) -> None:
         """Replace current hook mapping."""
 
@@ -486,6 +506,29 @@ class ViewerModelContainer:
             orig_layer.events.paint.connect(orig_paint)
             bucket.append((copied_layer.events.paint, copied_paint))
             bucket.append((orig_layer.events.paint, orig_paint))
+
+        # point 'selected_data' syncing needs special attention
+        if isinstance(orig_layer, Points):
+
+            def orig_selection(event):
+                return self._sync_selected_data(
+                    orig_layer, copied_layer, event
+                )
+
+            def copied_selection(event):
+                return self._sync_selected_data(
+                    copied_layer, orig_layer, event
+                )
+
+            orig_signal = orig_layer.selected_data.events.items_changed
+            copied_signal = copied_layer.selected_data.events.items_changed
+            orig_signal.connect(orig_selection)
+            copied_signal.connect(copied_selection)
+            bucket.append((orig_signal, orig_selection))
+            bucket.append((copied_signal, copied_selection))
+
+            # initial sync
+            self._sync_selected_data(orig_layer, copied_layer, None)
 
         # Special hooks based on layer type
         for hook_type, hooks in self._layer_hooks.items():
