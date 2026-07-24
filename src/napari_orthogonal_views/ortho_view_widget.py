@@ -37,25 +37,7 @@ def copy_layer(layer: Layer, name: str = "") -> Layer:
 
 
 def _sync_guard(*args: Any, **kwargs: Any) -> None:
-    """No-op placeholder slot used to protect real sync handlers from being skipped.
-
-    napari's ``VispyCanvas._update_layer_overlays`` connects itself to an overlay's
-    ``visible`` event so it can lazily build the vispy visual the first time the
-    overlay becomes visible. At that transition it *disconnects itself from inside*
-    the ``visible`` event's emission.
-
-    Under psygnal (napari >= 0.7) removing a slot while the signal is emitting shifts
-    the remaining slots down, so the slot immediately following napari's callback is
-    silently skipped for that one emission. Because the ortho views connect their
-    forward-sync handlers right after napari's callback, the first-connected view
-    (``right_widget``) would miss the very first ``bounding_box.visible`` change while
-    the second-connected view (``bottom_widget``) still received it.
-
-    Connecting this no-op right after napari's callback means the guard absorbs the
-    skip instead of a real sync handler. napari <= 0.6.x used the old EventEmitter,
-    which does not have this behaviour, so the guard is only attached to psygnal
-    signals.
-    """
+    """No-op placeholder slot used to protect real sync handlers from being skipped."""
 
 
 def _connect_sync_signal(
@@ -109,10 +91,12 @@ def get_property_names(
     Return properties that emit events on the given object.
 
     For Layer objects with include_nested=True, automatically discovers nested
-    EventedModel objects like TextManager and returns their properties as dicts: {nested_attr: [properties]}
+    EventedModel objects like TextManager and returns their properties as dicts:
+    {nested_attr: [properties]}
 
     For layers: only include settable properties.
-    For nested objects: include public properties.
+    For nested objects: include public properties. Colormap and Selection are skipped
+    because these cannot sync reliably as properties and need their own functions instead.
 
     Args:
         obj: The object to analyze (Layer or nested EventedModel)
@@ -155,7 +139,6 @@ def get_property_names(
             added_props.add(event_name)
 
     # Nested EventedModels
-
     if include_nested and isinstance(obj, Layer):
         # find all public attributes
         for attr_name in dir(obj):
@@ -202,11 +185,9 @@ class ViewerModelContainer:
         self._layer_hooks: dict[type, list[Callable]] = {}
         self.sync_filters = sync_filters or {}
 
-        # Track every (signal, slot) connection made on the *original* layers (and
-        # their nested objects) per layer, keyed by id(orig_layer), so they can be
-        # disconnected again when the layer is removed or the widget is torn down.
-        # Without this the connections outlive the layer and keep mutating (and
-        # referencing) the orphaned copied layer.
+        # Track every (signal, slot) connection made on the original layers and
+        # their nested objects, keyed by id(orig_layer), so they can be
+        # disconnected again when the layer is removed.
         self._layer_connections: dict[int, list[tuple[Any, Callable]]] = {}
 
         # Add crosshair overlays (initially invisible)
@@ -252,13 +233,14 @@ class ViewerModelContainer:
             if hasattr(events, "emitters"):
                 return events.emitters.get(name, None)
 
-            # 0.7.x
+            # >=0.7.0
             return getattr(events, name, None)
 
         # Forward sync from source -> target
         if forward:
 
-            # initial sync
+            # initial sync (skip current_size because it triggers immediate updates on a
+            # layer that is not ready yet)
             if prop_name != "current_size" and hasattr(target_obj, prop_name):
                 setattr(
                     target_obj,
@@ -365,16 +347,13 @@ class ViewerModelContainer:
                     bucket=bucket,
                 )
 
-    def _update_data(
-        self, source: Labels, target: Labels, event: Event
-    ) -> None:
+    def _update_data(self, source: Labels, target: Labels) -> None:
         """Copy data from source layer to target layer, which triggers a data event on
         the target layer. Block syncing to itself (VM1 -> orig -> VM1 is blocked, but
         VM1 -> orig -> VM2 is not blocked)
         Args:
             source: the source Labels layer
-            target: the target Labels layer
-            event: the event to be triggered (not used)"""
+            target: the target Labels layer"""
 
         self._block = True  # no syncing to itself is necessary
         target.data = (
@@ -395,9 +374,16 @@ class ViewerModelContainer:
         property_name: str,
         source_layer: Layer,
         target_layer: Layer,
-        event: Event,
+        _event: Event,
     ) -> None:
-        """Sync a property of a layer in this viewer model."""
+        """Sync a property of a layer in this viewer model.
+
+        Args:
+            property_name (str): name of the to be synced property.
+            source_layer (napari.layers.Layer): layer to copy from.
+            target_layer (napari.layers.Layer): layer to copy to.
+
+        """
 
         if self._block:
             return
@@ -411,13 +397,17 @@ class ViewerModelContainer:
         self._block = False
 
     def _sync_selected_data(
-        self, source_layer: Points, target_layer: Points, event: Event
+        self, source_layer: Points, target_layer: Points, _event: Event
     ) -> None:
-        """Sync the full point selection between two Points layers.
+        """Special sync function to sync the full point selection between two Points
+        layers. ``points.selected_data`` is a Selection (an evented set). The whole set
+        has to be synced, rather than its single ``active`` element, because ``active``
+        is None as soon as more than one point is selected, which would drop
+        multi-selections.
 
-        ``selected_data`` is a Selection (an evented set). The whole set has to be synced,
-        rather than its single ``active`` element, because ``active`` is None as
-        soon as more than one point is selected, which would drop multi-selections.
+        Args:
+            source_layer (Points)
+            target_layer (Points)
         """
 
         if self._block:
@@ -428,7 +418,7 @@ class ViewerModelContainer:
         self._block = False
 
     def set_layer_hooks(self, hooks: dict[type, list[Callable]]) -> None:
-        """Replace current hook mapping."""
+        """Replace current hook mapping to allow special handling of certain layer types."""
 
         self._layer_hooks = hooks
 
@@ -454,6 +444,7 @@ class ViewerModelContainer:
         # sync properties
         self._sync_layer_properties(orig_layer, copied_layer, bucket)
 
+        # Special relevant labels layer syncing
         if isinstance(orig_layer, Labels):
 
             # Calling the Undo/Redo function on the labels layer should also refresh the
@@ -467,11 +458,11 @@ class ViewerModelContainer:
 
                 def wrapped_undo(self):
                     orig_undo()
-                    update_fn(source=self, target=target_layer, event=None)
+                    update_fn(source=self, target=target_layer)
 
                 def wrapped_redo(self):
                     orig_redo()
-                    update_fn(source=self, target=target_layer, event=None)
+                    update_fn(source=self, target=target_layer)
 
                 # Replace methods on the instance
                 source_layer.undo = MethodType(wrapped_undo, source_layer)
@@ -488,18 +479,18 @@ class ViewerModelContainer:
             # event, because we need it in order to invoke syncing between the different
             # viewers. (Paint event does not trigger 'data' event by itself).
             # We do not need to connect to the eraser and fill bucket separately.
-            def copied_paint(event):
+            def copied_paint(_event):
                 # copy data from copied_layer to orig_layer (orig_layer emits signal,
                 # which triggers update on other viewer models, if present)
                 return self._update_data(
-                    source=copied_layer, target=orig_layer, event=event
+                    source=copied_layer, target=orig_layer
                 )
 
-            def orig_paint(event):
+            def orig_paint(_event):
                 # copy data from orig_layer to copied_layer (copied_layer emits signal
                 # but we don't process it)
                 return self._update_data(
-                    source=orig_layer, target=copied_layer, event=event
+                    source=orig_layer, target=copied_layer
                 )
 
             copied_layer.events.paint.connect(copied_paint)
@@ -507,7 +498,7 @@ class ViewerModelContainer:
             bucket.append((copied_layer.events.paint, copied_paint))
             bucket.append((orig_layer.events.paint, orig_paint))
 
-        # point 'selected_data' syncing needs special attention
+        # # Special relevant 'selected_data' syncing for points layers
         if isinstance(orig_layer, Points):
 
             def orig_selection(event):
