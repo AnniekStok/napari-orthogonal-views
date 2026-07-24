@@ -446,6 +446,62 @@ def test_points_selection_sync(make_napari_viewer, qtbot):
     m.cleanup()
 
 
+def test_labels_undo_redo_sync(make_napari_viewer, qtbot):
+    """Undo/redo on a Labels layer must sync the data across the main viewer and
+    both ortho views.
+
+    Undo/redo do not emit a paint/data event, so the plugin wraps the layers'
+    ``undo``/``redo`` methods to explicitly re-sync via ``_update_data``. This test
+    exercises that path in both directions (main -> ortho and ortho -> main).
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    labels = Labels(np.zeros((20, 20, 20), dtype=np.uint8))
+    viewer.add_layer(labels)
+
+    right = m.right_widget.vm_container.viewer_model.layers[0]
+    bottom = m.bottom_widget.vm_container.viewer_model.layers[0]
+
+    def counts():
+        """Number of voxels equal to 5 in each of the main view and ortho views."""
+        return (
+            int((labels.data == 5).sum()),
+            int((right.data == 5).sum()),
+            int((bottom.data == 5).sum()),
+        )
+
+    assert counts() == (0, 0, 0)
+
+    # An undoable edit on the main layer syncs to both ortho views.
+    idx = (np.array([5, 6, 7]), np.array([5, 6, 7]), np.array([5, 6, 7]))
+    labels.data_setitem(idx, 5)
+    assert counts() == (3, 3, 3)
+
+    # Undo on the main layer reverts the edit everywhere.
+    labels.undo()
+    assert counts() == (0, 0, 0)
+
+    # Redo on the main layer restores the edit everywhere.
+    labels.redo()
+    assert counts() == (3, 3, 3)
+
+    # Reverse direction: an undoable edit made on an ortho view layer, then
+    # undone from that same ortho layer, must also sync back to the main viewer.
+    right.data_setitem(
+        (np.array([1, 2, 3]), np.array([1, 2, 3]), np.array([1, 2, 3])), 5
+    )
+    assert counts() == (6, 6, 6)
+
+    right.undo()
+    assert counts() == (3, 3, 3)
+
+    m.cleanup()
+
+
 def test_layer_hook(make_napari_viewer, qtbot):
     """Test setting optional custom layer hooks. This is to forward specific
     events/outcomes to the original layer (could be a subclass) for further downstream
