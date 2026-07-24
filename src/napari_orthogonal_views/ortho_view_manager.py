@@ -8,10 +8,9 @@ import numpy as np
 import tqdm
 from napari._vispy.utils.visual import overlay_to_visual
 from napari.components.viewer_model import ViewerModel
-from napari.layers import Labels, Layer
+from napari.layers import Layer
 from napari.utils.action_manager import action_manager
 from napari.utils.io import imsave
-from napari.utils.notifications import show_warning
 from napari.viewer import Viewer
 from qtpy.QtCore import QEvent, QObject, Qt, QTimer
 from qtpy.QtWidgets import (
@@ -190,19 +189,42 @@ class OrthoViewManager:
             0.01, 0.01
         )  # minimal size for right and bottom
 
-        if len(self.viewer.layers) > 0:
-            show_warning(
-                "Blending of labels layers may not display correctly. To ensure correct blending of layers in the main viewer, call OrthoViewManager before adding layers to the viewer."
-            )
-            for (
-                layer,
-                visual,
-            ) in self._original_qt_viewer.canvas.layer_to_visual.items():
-                if isinstance(layer, Labels):
-                    visual.node.set_gl_state(blend=True, depth_test=False)
-                    layer.blending = "translucent_no_depth"
+        # Re-apply napari's depth setup whenever the context is (re)created to ensure all
+        # depth-tested visuals (e.g. blending=translucent) are still working
+        self._stabilize_canvas_gl(self._original_qt_viewer.canvas)
 
         self._container = container
+
+    def _stabilize_canvas_gl(self, canvas) -> None:
+        """Keep a vispy canvas' depth-test configuration correct across GL context
+        recreation.
+
+        Inserting the original canvas into the orthogonal-view splitter reparents its
+        ``QOpenGLWidget``. With ``Qt.AA_ShareOpenGLContexts`` disabled (the napari
+        default) that makes Qt recreate the widget's GL context, which resets the
+        depth function back to ``less`` (instead of lequal), rejecting any fragment at
+        the same depth, and therefore it looks like some layers 'disappear' unless their
+        blending mode is 'translucent_no_depth'.
+
+        """
+
+        scene_canvas = getattr(canvas, "_scene_canvas", None)
+        if scene_canvas is None:
+            return
+
+        def _apply(event=None) -> None:
+            with contextlib.suppress(Exception):
+                scene_canvas.context.set_depth_func("lequal")
+                scene_canvas.update()
+
+        # Re-apply whenever the GL context is (re)created (reparent, obscure/reshow).
+        with contextlib.suppress(Exception):
+            scene_canvas.events.initialize.connect(_apply)
+
+        # Apply now for the reparent that just happened, and again once the Qt event
+        # loop has processed the reparent/reshow (when the context is actually rebuilt).
+        _apply()
+        QTimer.singleShot(0, _apply)
 
     def set_cross_hairs(self, state: bool = True) -> None:
         """Activate/deactivate the checkbox to set the crosshairs."""
@@ -336,6 +358,11 @@ class OrthoViewManager:
         self.h_splitter_bottom.replaceWidget(idx, new_bottom)
         self.bottom_widget = new_bottom
         old_bottom.deleteLater()
+
+        # Keep the ortho canvases' depth-test config correct across GL context
+        # recreation as well (same reparenting mechanism as the main canvas).
+        self._stabilize_canvas_gl(self.right_widget.qt_viewer.canvas)
+        self._stabilize_canvas_gl(self.bottom_widget.qt_viewer.canvas)
 
         # Connect to signals that update the dims order in the main viewer
         self.viewer.dims.events.order.connect(self.update_dims_order)
