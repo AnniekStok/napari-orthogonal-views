@@ -1,14 +1,17 @@
 import contextlib
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from functools import partial
 from types import MethodType
+from typing import Any
 
 import napari
 from napari.components.viewer_model import ViewerModel
-from napari.layers import Labels, Layer
+from napari.layers import Labels, Layer, Points
 from napari.qt import QtViewer
+from napari.utils.colormaps import Colormap
 from napari.utils.events import Event, EventEmitter
-from napari.utils.events.event import WarningEmitter
+from psygnal.containers import Selection
 from qtpy.QtWidgets import (
     QHBoxLayout,
     QWidget,
@@ -33,37 +36,140 @@ def copy_layer(layer: Layer, name: str = "") -> Layer:
     return copied_layer
 
 
-def get_property_names(layer: Layer) -> list[str]:
-    """Return a list of all the layer properties (opacity, mode, ...) that emit events."""
+def _sync_guard(*args: Any, **kwargs: Any) -> None:
+    """No-op placeholder slot used to protect real sync handlers from being skipped."""
 
-    klass = layer.__class__
-    emitter_list = []
-    for event_name, event_emitter in layer.events.emitters.items():
-        if isinstance(event_emitter, WarningEmitter):
+
+def _connect_sync_signal(
+    signal: Any, handler: Callable
+) -> list[tuple[Any, Callable]]:
+    """Connect ``handler`` to ``signal``, guarding against psygnal's mid-emit skip.
+
+    For psygnal signals (napari >= 0.7) a throwaway :func:`_sync_guard` slot is
+    connected first so it, rather than the real ``handler``, absorbs the slot that
+    napari skips when it disconnects its lazy overlay callback during emission.
+
+    Returns the ``(signal, slot)`` pairs that were connected so the caller can
+    track them and disconnect them again during cleanup.
+    """
+
+    connected: list[tuple[Any, Callable]] = []
+
+    # psygnal SignalInstance exposes ``_slots``; napari 0.6.x EventEmitter does not
+    # and is unaffected by the skip, so the guard is psygnal-only.
+    if hasattr(signal, "_slots"):
+        with contextlib.suppress(TypeError, ValueError):
+            signal.connect(_sync_guard, unique=True, check_nargs=False)
+            connected.append((signal, _sync_guard))
+    signal.connect(handler)
+    connected.append((signal, handler))
+    return connected
+
+
+def _iter_event_signals(events_obj: Any) -> Iterator[tuple[str, Any]]:
+    """Yield (name, signal) pairs across napari versions. Napari 0.6.x has a dictionary
+    with emitters, but napari >= 0.7.x uses SignalGroups, so we need to check for both.
+    """
+    # napari 0.6.x: dict-like emitters
+    if hasattr(events_obj, "emitters"):
+        yield from events_obj.emitters.items()
+        return
+
+    # napari 0.7.x: SignalGroup (attribute-based)
+    for name in dir(events_obj):
+        if name.startswith("_"):
             continue
-        if event_name in ("thumbnail", "name"):
+        sig = getattr(events_obj, name, None)
+        if hasattr(sig, "connect"):
+            yield name, sig
+
+
+def get_property_names(
+    obj: Any, include_nested: bool = True
+) -> list[str | dict[str, list[str]]]:
+    """
+    Return properties that emit events on the given object.
+
+    For Layer objects with include_nested=True, automatically discovers nested
+    EventedModel objects like TextManager and returns their properties as dicts:
+    {nested_attr: [properties]}
+
+    For layers: only include settable properties.
+    For nested objects: include public properties. Colormap and Selection are skipped
+    because these cannot sync reliably as properties and need their own functions instead.
+
+    Args:
+        obj: The object to analyze (Layer or nested EventedModel)
+        include_nested: If True and obj is a Layer, auto-discover nested EventedModels
+
+    Returns:
+        List mixing strings (property names) and dicts ({nested_attr: [properties]})
+    """
+
+    emitter_list: list[str | dict[str, list[str]]] = []
+
+    if not hasattr(obj, "events"):
+        return emitter_list
+
+    # Skip specific properties that cannot sync because they are not shown on ortho views
+    skip_props = {"thumbnail", "name", "scale_factor"}
+    added_props = set()
+
+    klass = obj.__class__
+
+    # Collect signal-backed properties
+    for event_name, _signal in _iter_event_signals(obj.events):
+
+        if event_name in skip_props or event_name.startswith("_"):
             continue
-        if (
-            isinstance(getattr(klass, event_name, None), property)
-            and getattr(klass, event_name).fset is not None
-        ):
+
+        if event_name in added_props:
+            continue
+
+        # For napari layers only include real settable properties
+        klass_attr = getattr(klass, event_name, None)
+        if isinstance(klass_attr, property):
+            if klass_attr.fset is not None:
+                emitter_list.append(event_name)
+                added_props.add(event_name)
+
+        # Non-Layer EventedModel-like objects
+        elif not isinstance(obj, Layer) and hasattr(obj, event_name):
             emitter_list.append(event_name)
+            added_props.add(event_name)
+
+    # Nested EventedModels
+    if include_nested and isinstance(obj, Layer):
+        # find all public attributes
+        for attr_name in dir(obj):
+            # skip  private attributes, special cases, already added properties and constants
+            if (
+                attr_name.startswith("_")
+                or attr_name in skip_props
+                or attr_name in added_props
+                or attr_name.isupper()
+            ):
+                continue
+
+            attr = getattr(obj, attr_name)
+
+            # Skip Colormap objects (points.face_colormap, border_colormap) because these
+            # cannot sync reliably. Image layers should not be affected by this. Also skip
+            # the Points 'selected_data' selection, because it only syncs the 'active'
+            # element, which does not work for multi-selection.
+            if isinstance(attr, Colormap | Selection):
+                continue
+
+            # detect nested evented objects
+            if (
+                hasattr(attr, "events")
+                and not isinstance(attr, Layer)
+                and not callable(attr)
+            ):
+                nested_props = get_property_names(attr, include_nested=False)
+                if nested_props:
+                    emitter_list.append({attr_name: nested_props})
     return emitter_list
-
-
-class own_partial:
-    """
-    Workaround for deepcopy not copying partial functions
-    (Qt widgets are not serializable)
-    """
-
-    def __init__(self, func, *args, **kwargs):
-        self.func = func
-        self.args = args
-        self.kwargs = kwargs
-
-    def __call__(self, *args, **kwargs):
-        return self.func(*(self.args + args), **{**self.kwargs, **kwargs})
 
 
 class ViewerModelContainer:
@@ -79,6 +185,11 @@ class ViewerModelContainer:
         self._layer_hooks: dict[type, list[Callable]] = {}
         self.sync_filters = sync_filters or {}
 
+        # Track every (signal, slot) connection made on the original layers and
+        # their nested objects, keyed by id(orig_layer), so they can be
+        # disconnected again when the layer is removed.
+        self._layer_connections: dict[int, list[tuple[Any, Callable]]] = {}
+
         # Add crosshair overlays (initially invisible)
         self.crosshair_overlay = CrosshairOverlay(
             blending="translucent_no_depth", axis_order=order
@@ -87,11 +198,104 @@ class ViewerModelContainer:
             warnings.simplefilter("ignore")
             self.viewer_model._overlays["crosshairs"] = self.crosshair_overlay
 
+    def _setup_property_sync(
+        self,
+        source_obj: Any,
+        target_obj: Any,
+        prop_name: str,
+        forward: bool = True,
+        reverse: bool = True,
+        bucket: list[tuple[Any, Callable]] | None = None,
+    ) -> None:
+        """Set up bidirectional syncing for a single property between two objects.
+
+        Args:
+            source_obj (Layer or EventedModel): Object to sync from
+            target_obj (Layer or EventedModel): Object to sync to
+            prop_name (str): Name of the property to sync
+            forward (bool): whether to set up forward syncing
+            reverse (bool): whether to set up reverse syncing
+            bucket (list): optional list to record created (signal, slot)
+                connections in, so they can be disconnected on cleanup.
+        """
+        if not hasattr(source_obj, "events") or not hasattr(
+            source_obj.events, prop_name
+        ):
+            return
+
+        def get_signal(obj: Any, name: str) -> Any | None:
+            if not hasattr(obj, "events"):
+                return None
+
+            events = obj.events
+
+            # 0.6.x
+            if hasattr(events, "emitters"):
+                return events.emitters.get(name, None)
+
+            # >=0.7.0
+            return getattr(events, name, None)
+
+        # Forward sync from source -> target
+        if forward:
+
+            # initial sync (skip current_size because it triggers immediate updates on a
+            # layer that is not ready yet)
+            if prop_name != "current_size" and hasattr(target_obj, prop_name):
+                setattr(
+                    target_obj,
+                    prop_name,
+                    getattr(source_obj, prop_name),
+                )
+
+            signal = get_signal(source_obj, prop_name)
+
+            if signal is not None and hasattr(signal, "connect"):
+                made = _connect_sync_signal(
+                    signal,
+                    partial(
+                        self._sync_property,
+                        prop_name,
+                        source_obj,
+                        target_obj,
+                    ),
+                )
+                if bucket is not None:
+                    bucket.extend(made)
+
+        # Reverse sync: target → source
+        if reverse and hasattr(target_obj, "events"):
+
+            signal = get_signal(target_obj, prop_name)
+
+            if signal is not None and hasattr(signal, "connect"):
+                made = _connect_sync_signal(
+                    signal,
+                    partial(
+                        self._sync_property,
+                        prop_name,
+                        target_obj,
+                        source_obj,
+                    ),
+                )
+                if bucket is not None:
+                    bucket.extend(made)
+
     def _sync_layer_properties(
-        self, orig_layer: Layer, copied_layer: Layer
+        self,
+        orig_layer: Layer,
+        copied_layer: Layer,
+        bucket: list[tuple[Any, Callable]] | None = None,
     ) -> None:
         """Sync properties between orig_layer and copied_layer, applying optional
-        sync_filters."""
+        sync_filters. Automatically discovers and syncs nested object properties.
+
+        Args:
+            orig_layer: Original layer to sync from
+            copied_layer: Copied layer to sync to
+            bucket (list): optional list to record created (signal, slot)
+                connections in, so they can be disconnected on cleanup.
+        """
 
         def is_excluded(layer, prop, direction):
             """Check whether to skip syncing a property in a given direction."""
@@ -104,51 +308,52 @@ class ViewerModelContainer:
                         return True
             return False
 
-        for property_name in get_property_names(orig_layer):
-            # Forward sync: orig_layer → copied_layer
-            if not is_excluded(orig_layer, property_name, "forward"):
+        # Sync layer properties (including nested properties automatically discovered)
+        for item in get_property_names(orig_layer):
+            if isinstance(item, dict):
+                # Handle nested properties: {nested_attr_name: [properties]}
+                for nested_attr, nested_props in item.items():
+                    if hasattr(orig_layer, nested_attr) and hasattr(
+                        copied_layer, nested_attr
+                    ):
+                        orig_nested = getattr(orig_layer, nested_attr)
+                        copied_nested = getattr(copied_layer, nested_attr)
 
-                # first copy the value immediately
-                if (
-                    property_name != "current_size"
-                ):  # skip initially (special case)
-                    setattr(
-                        copied_layer,
-                        property_name,
-                        getattr(orig_layer, property_name),
-                    )
-
-                # set up syncing
-                getattr(orig_layer.events, property_name).connect(
-                    own_partial(
-                        self._sync_property,
-                        property_name,
-                        orig_layer,
-                        copied_layer,
-                    )
+                        for prop_name in nested_props:
+                            if hasattr(orig_nested, prop_name) and hasattr(
+                                copied_nested, prop_name
+                            ):
+                                self._setup_property_sync(
+                                    orig_nested,
+                                    copied_nested,
+                                    prop_name,
+                                    bucket=bucket,
+                                )
+            else:
+                # Handle regular layer properties
+                property_name = item
+                forward_sync = not is_excluded(
+                    orig_layer, property_name, "forward"
+                )
+                reverse_sync = not is_excluded(
+                    orig_layer, property_name, "reverse"
+                )
+                self._setup_property_sync(
+                    orig_layer,
+                    copied_layer,
+                    property_name,
+                    forward_sync,
+                    reverse_sync,
+                    bucket=bucket,
                 )
 
-            # Reverse sync: copied_layer → orig_layer
-            if not is_excluded(orig_layer, property_name, "reverse"):
-                getattr(copied_layer.events, property_name).connect(
-                    own_partial(
-                        self._sync_property,
-                        property_name,
-                        copied_layer,
-                        orig_layer,
-                    )
-                )
-
-    def _update_data(
-        self, source: Labels, target: Labels, event: Event
-    ) -> None:
+    def _update_data(self, source: Labels, target: Labels) -> None:
         """Copy data from source layer to target layer, which triggers a data event on
         the target layer. Block syncing to itself (VM1 -> orig -> VM1 is blocked, but
         VM1 -> orig -> VM2 is not blocked)
         Args:
             source: the source Labels layer
-            target: the target Labels layer
-            event: the event to be triggered (not used)"""
+            target: the target Labels layer"""
 
         self._block = True  # no syncing to itself is necessary
         target.data = (
@@ -169,9 +374,16 @@ class ViewerModelContainer:
         property_name: str,
         source_layer: Layer,
         target_layer: Layer,
-        event: Event,
+        _event: Event,
     ) -> None:
-        """Sync a property of a layer in this viewer model."""
+        """Sync a property of a layer in this viewer model.
+
+        Args:
+            property_name (str): name of the to be synced property.
+            source_layer (napari.layers.Layer): layer to copy from.
+            target_layer (napari.layers.Layer): layer to copy to.
+
+        """
 
         if self._block:
             return
@@ -184,8 +396,29 @@ class ViewerModelContainer:
         )
         self._block = False
 
+    def _sync_selected_data(
+        self, source_layer: Points, target_layer: Points, _event: Event
+    ) -> None:
+        """Special sync function to sync the full point selection between two Points
+        layers. ``points.selected_data`` is a Selection (an evented set). The whole set
+        has to be synced, rather than its single ``active`` element, because ``active``
+        is None as soon as more than one point is selected, which would drop
+        multi-selections.
+
+        Args:
+            source_layer (Points)
+            target_layer (Points)
+        """
+
+        if self._block:
+            return
+
+        self._block = True
+        target_layer.selected_data = set(source_layer.selected_data)
+        self._block = False
+
     def set_layer_hooks(self, hooks: dict[type, list[Callable]]) -> None:
-        """Replace current hook mapping."""
+        """Replace current hook mapping to allow special handling of certain layer types."""
 
         self._layer_hooks = hooks
 
@@ -197,15 +430,21 @@ class ViewerModelContainer:
         )
         copied_layer = self.viewer_model.layers[orig_layer.name]
 
+        # Collect every connection made for this layer so it can be cleaned up
+        # again when the layer is removed (see remove_layer_connections).
+        bucket = self._layer_connections.setdefault(id(orig_layer), [])
+
         # sync name
         def sync_name_wrapper(event):
             return self._sync_name(orig_layer, copied_layer, event)
 
         orig_layer.events.name.connect(sync_name_wrapper)
+        bucket.append((orig_layer.events.name, sync_name_wrapper))
 
         # sync properties
-        self._sync_layer_properties(orig_layer, copied_layer)
+        self._sync_layer_properties(orig_layer, copied_layer, bucket)
 
+        # Special relevant labels layer syncing
         if isinstance(orig_layer, Labels):
 
             # Calling the Undo/Redo function on the labels layer should also refresh the
@@ -219,11 +458,11 @@ class ViewerModelContainer:
 
                 def wrapped_undo(self):
                     orig_undo()
-                    update_fn(source=self, target=target_layer, event=None)
+                    update_fn(source=self, target=target_layer)
 
                 def wrapped_redo(self):
                     orig_redo()
-                    update_fn(source=self, target=target_layer, event=None)
+                    update_fn(source=self, target=target_layer)
 
                 # Replace methods on the instance
                 source_layer.undo = MethodType(wrapped_undo, source_layer)
@@ -237,24 +476,73 @@ class ViewerModelContainer:
             # event, because we need it in order to invoke syncing between the different
             # viewers. (Paint event does not trigger 'data' event by itself).
             # We do not need to connect to the eraser and fill bucket separately.
-            copied_layer.events.paint.connect(
-                lambda event: self._update_data(
-                    source=copied_layer, target=orig_layer, event=event
-                )  # copy data from copied_layer to orig_layer (orig_layer emits signal,
+            def copied_paint(_event):
+                # copy data from copied_layer to orig_layer (orig_layer emits signal,
                 # which triggers update on other viewer models, if present)
-            )
-            orig_layer.events.paint.connect(
-                lambda event: self._update_data(
-                    source=orig_layer, target=copied_layer, event=event
-                )  # copy data from orig_layer to copied_layer (copied_layer emits signal
+                return self._update_data(
+                    source=copied_layer, target=orig_layer
+                )
+
+            def orig_paint(_event):
+                # copy data from orig_layer to copied_layer (copied_layer emits signal
                 # but we don't process it)
-            )
+                return self._update_data(
+                    source=orig_layer, target=copied_layer
+                )
+
+            copied_layer.events.paint.connect(copied_paint)
+            orig_layer.events.paint.connect(orig_paint)
+            bucket.append((copied_layer.events.paint, copied_paint))
+            bucket.append((orig_layer.events.paint, orig_paint))
+
+        # # Special relevant 'selected_data' syncing for points layers
+        if isinstance(orig_layer, Points):
+
+            def orig_selection(event):
+                return self._sync_selected_data(
+                    orig_layer, copied_layer, event
+                )
+
+            def copied_selection(event):
+                return self._sync_selected_data(
+                    copied_layer, orig_layer, event
+                )
+
+            orig_signal = orig_layer.selected_data.events.items_changed
+            copied_signal = copied_layer.selected_data.events.items_changed
+            orig_signal.connect(orig_selection)
+            copied_signal.connect(copied_selection)
+            bucket.append((orig_signal, orig_selection))
+            bucket.append((copied_signal, copied_selection))
+
+            # initial sync
+            self._sync_selected_data(orig_layer, copied_layer, None)
 
         # Special hooks based on layer type
         for hook_type, hooks in self._layer_hooks.items():
             if isinstance(orig_layer, hook_type):
                 for hook in hooks:
                     hook(orig_layer, copied_layer)
+
+    def remove_layer_connections(self, orig_layer: Layer) -> None:
+        """Disconnect and forget every sync connection made for ``orig_layer``.
+
+        Called when a layer is removed from the main viewer so the connections on
+        the original layer (and its nested objects) do not outlive the copied layer
+        and keep mutating/referencing it.
+        """
+
+        for signal, handler in self._layer_connections.pop(id(orig_layer), []):
+            with contextlib.suppress(ValueError, RuntimeError, TypeError):
+                signal.disconnect(handler)
+
+    def disconnect_all(self) -> None:
+        """Disconnect every tracked sync connection across all layers."""
+
+        for key in list(self._layer_connections):
+            for signal, handler in self._layer_connections.pop(key, []):
+                with contextlib.suppress(ValueError, RuntimeError, TypeError):
+                    signal.disconnect(handler)
 
 
 class OrthoViewWidget(QWidget):
@@ -417,6 +705,10 @@ class OrthoViewWidget(QWidget):
     def _layer_removed(self, event: Event) -> None:
         """Remove layer in all viewer models"""
 
+        # Disconnect the sync connections made on the original layer so they don't
+        # outlive the removed copied layer.
+        self.vm_container.remove_layer_connections(event.value)
+
         layer_name = event.value.name
         if layer_name in self.vm_container.viewer_model.layers:
             self.vm_container.viewer_model.layers.pop(layer_name)
@@ -528,6 +820,10 @@ class OrthoViewWidget(QWidget):
                 sig.disconnect(handler)
 
         self._connections.clear()
+
+        # Also disconnect the per-layer sync connections made on the original
+        # layers (and their nested objects), which are tracked separately.
+        self.vm_container.disconnect_all()
 
 
 def check_center(model: ViewerModel, coords: list[int]) -> tuple[int, int]:

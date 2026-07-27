@@ -1,11 +1,14 @@
 import numpy as np
-from napari.layers import Image, Labels
+from napari.layers import Image, Labels, Points
 
 from napari_orthogonal_views.ortho_view_manager import (
     _get_manager,
     show_orthogonal_views,
 )
-from napari_orthogonal_views.ortho_view_widget import OrthoViewWidget
+from napari_orthogonal_views.ortho_view_widget import (
+    OrthoViewWidget,
+    get_property_names,
+)
 
 
 def test_add_move_remove_layer(make_napari_viewer, qtbot):
@@ -137,6 +140,11 @@ def test_sync(make_napari_viewer, qtbot):
     labels.name = "test_labels_layer"
     viewer.add_layer(labels)
 
+    # test points layer
+    points = Points([[8, 10, 10, 10], [7, 8, 8, 8]])
+    points.name = "test_points_layer"
+    viewer.add_layer(points)
+
     # Update current step and check that the viewer models follow
     viewer.dims.current_step = (1, 1, 0, 0)
     assert viewer.dims.current_step == (1, 1, 0, 0)
@@ -172,6 +180,10 @@ def test_sync(make_napari_viewer, qtbot):
     viewer.layers[0].visible = False
     m.right_widget.vm_container.viewer_model.layers[1].opacity = 0.5
     m.bottom_widget.vm_container.viewer_model.layers[1].contour = 1
+    viewer.layers[2].text.size = 23  # change text size (nested property)
+    viewer.layers[0].bounding_box.visible = (
+        True  # change bounding box visibility
+    )
 
     assert viewer.layers[0].visible is False
     assert m.right_widget.vm_container.viewer_model.layers[0].visible is False
@@ -182,6 +194,19 @@ def test_sync(make_napari_viewer, qtbot):
     assert viewer.layers[1].contour == 1
     assert m.right_widget.vm_container.viewer_model.layers[1].contour == 1
     assert m.bottom_widget.vm_container.viewer_model.layers[1].contour == 1
+    assert m.bottom_widget.vm_container.viewer_model.layers[2].text.size == 23
+    assert m.right_widget.vm_container.viewer_model.layers[2].text.size == 23
+    assert viewer.layers[0].bounding_box.visible is True
+    assert (
+        m.bottom_widget.vm_container.viewer_model.layers[
+            0
+        ].bounding_box.visible
+        is True
+    )
+    assert (
+        m.right_widget.vm_container.viewer_model.layers[0].bounding_box.visible
+        is True
+    )
 
     # Sync data
     m.right_widget.vm_container.viewer_model.layers[1].data[
@@ -196,6 +221,283 @@ def test_sync(make_napari_viewer, qtbot):
     np.testing.assert_array_equal(
         m.bottom_widget.vm_container.viewer_model.layers[1].data, expected
     )
+
+    m.cleanup()
+
+
+def test_sync_repeated_toggles(make_napari_viewer, qtbot):
+    """Regression test for the psygnal mid-emit slot skip (napari >= 0.7).
+
+    napari's VispyCanvas._update_layer_overlays disconnects itself from an
+    overlay's ``visible`` event while that event is emitting (the first time the
+    overlay becomes visible). Under psygnal this shifts the remaining slots and
+    silently skips the slot right after napari's callback, which is the
+    first-connected view's (right_widget) sync handler. A no-op guard slot is
+    connected first to absorb that skip.
+
+    This test verifies that:
+        - Normal (non-overlay) properties are *not* absorbed by the guard.
+        - Overlay ``visible`` syncs on the first toggle for *both* views.
+        - Syncing remains correct across repeated toggles, in both the
+          forward (orig -> copies) and reverse (a copy -> orig + other copy)
+          directions.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+    assert isinstance(m.right_widget, OrthoViewWidget)
+
+    img = Image(np.zeros((5, 20, 20, 20)))
+    img.name = "img"
+    viewer.add_layer(img)
+
+    labels = Labels(np.zeros((5, 20, 20, 20), dtype=np.uint8))
+    labels.name = "labels"
+    viewer.add_layer(labels)
+
+    points = Points([[1, 1, 1, 1], [2, 2, 2, 2]])
+    points.name = "points"
+    viewer.add_layer(points)
+
+    def right(i):
+        return m.right_widget.vm_container.viewer_model.layers[i]
+
+    def bottom(i):
+        return m.bottom_widget.vm_container.viewer_model.layers[i]
+
+    for rep in range(4):
+        # --- forward sync of normal properties (must not be absorbed) ---
+        img.opacity = 0.1 + 0.2 * rep
+        assert right(0).opacity == img.opacity
+        assert bottom(0).opacity == img.opacity
+
+        img.visible = rep % 2 == 0
+        assert right(0).visible is img.visible
+        assert bottom(0).visible is img.visible
+
+        labels.contour = rep
+        assert right(1).contour == labels.contour
+        assert bottom(1).contour == labels.contour
+
+        points.text.size = 10 + rep  # nested property
+        assert right(2).text.size == points.text.size
+        assert bottom(2).text.size == points.text.size
+
+        # --- reverse sync from the right copy -> orig + bottom copy ---
+        right(0).gamma = 0.5 + 0.1 * rep
+        assert img.gamma == right(0).gamma
+        assert bottom(0).gamma == right(0).gamma
+
+        # --- overlay visible: forward, must sync for BOTH views on toggle ---
+        img.bounding_box.visible = rep % 2 == 0
+        assert (
+            right(0).bounding_box.visible is img.bounding_box.visible
+        ), f"right bb.visible not synced (forward, rep {rep})"
+        assert (
+            bottom(0).bounding_box.visible is img.bounding_box.visible
+        ), f"bottom bb.visible not synced (forward, rep {rep})"
+
+        # --- overlay visible: reverse from right copy ---
+        right(0).bounding_box.visible = rep % 2 == 1
+        assert img.bounding_box.visible is right(0).bounding_box.visible
+        assert bottom(0).bounding_box.visible is right(0).bounding_box.visible
+
+        # --- overlay visible: reverse from bottom copy ---
+        bottom(0).bounding_box.visible = rep % 2 == 0
+        assert img.bounding_box.visible is bottom(0).bounding_box.visible
+        assert right(0).bounding_box.visible is bottom(0).bounding_box.visible
+
+    m.cleanup()
+
+
+def test_colormap_sync(make_napari_viewer, qtbot):
+    """Colormap syncing.
+
+    Image/Labels expose ``colormap`` as a settable layer property with an
+    ``events.colormap`` emitter, so it is synced as a flat, whole-object property
+    (forward and reverse), even though napari replaces the whole Colormap object
+    on assignment.
+
+    Points ``face_colormap`` / ``border_colormap`` are nested Colormap value
+    objects that napari replaces wholesale *without* emitting any layer-level
+    event. Connecting to the current colormap object's field events would silently
+    go stale on replacement, so they are deliberately *excluded* from nested
+    discovery rather than synced unreliably.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    # Points face/border colormaps must NOT be discovered as nested objects.
+    points = Points([[1, 1, 1], [2, 2, 2]])
+    nested = [
+        list(d.keys())[0]
+        for d in get_property_names(points)
+        if isinstance(d, dict)
+    ]
+    assert "face_colormap" not in nested
+    assert "border_colormap" not in nested
+
+    # Image colormap is a flat property and must still sync both ways.
+    img = Image(np.zeros((5, 20, 20)))
+    img.name = "img"
+    viewer.add_layer(img)
+
+    right = m.right_widget.vm_container.viewer_model.layers[0]
+    bottom = m.bottom_widget.vm_container.viewer_model.layers[0]
+
+    img.colormap = "magma"
+    assert right.colormap.name == "magma"
+    assert bottom.colormap.name == "magma"
+
+    # reverse: setting on a copy propagates to orig and the other copy
+    right.colormap = "viridis"
+    assert img.colormap.name == "viridis"
+    assert bottom.colormap.name == "viridis"
+
+    m.cleanup()
+
+
+def test_sync_connections_cleaned_up(make_napari_viewer, qtbot):
+    """Removing a layer must disconnect the sync connections made on the original
+    layer, so they do not outlive the removed copied layer and keep mutating it.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    img = Image(np.zeros((5, 20, 20)))
+    img.name = "img"
+    viewer.add_layer(img)
+
+    container = m.right_widget.vm_container
+    copied = container.viewer_model.layers[0]  # keep a reference to the copy
+
+    # Connections were tracked for this layer.
+    assert id(img) in container._layer_connections
+    assert len(container._layer_connections[id(img)]) > 0
+
+    # Remove the layer; tracked connections must be dropped.
+    viewer.layers.remove(img)
+    assert id(img) not in container._layer_connections
+    assert "img" not in container.viewer_model.layers
+
+    # Mutating the (still referenced) original layer must NOT touch the orphaned
+    # copied layer anymore.
+    copied.opacity = 1.0
+    copied.bounding_box.visible = False
+    img.opacity = 0.25
+    img.bounding_box.visible = True
+
+    assert copied.opacity == 1.0
+    assert copied.bounding_box.visible is False
+
+    m.cleanup()
+
+
+def test_points_selection_sync(make_napari_viewer, qtbot):
+    """Point ``selected_data`` must sync as a whole set in order to work for both single
+    and multi-selections.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    points = Points([[1, 1], [2, 2], [3, 3], [4, 4]])
+    viewer.add_layer(points)
+
+    right = m.right_widget.vm_container.viewer_model.layers[0]
+    bottom = m.bottom_widget.vm_container.viewer_model.layers[0]
+
+    def selections():
+        return (
+            set(points.selected_data),
+            set(right.selected_data),
+            set(bottom.selected_data),
+        )
+
+    # single selection on the main viewer
+    points.selected_data = {1}
+    assert selections() == ({1}, {1}, {1})
+
+    # multi selection on the main viewer (this is what used to be dropped)
+    points.selected_data = {0, 2, 3}
+    assert selections() == ({0, 2, 3}, {0, 2, 3}, {0, 2, 3})
+
+    # multi selection made in an ortho view propagates back to the main viewer
+    right.selected_data = {0, 1}
+    assert selections() == ({0, 1}, {0, 1}, {0, 1})
+
+    bottom.selected_data = {1, 2, 3}
+    assert selections() == ({1, 2, 3}, {1, 2, 3}, {1, 2, 3})
+
+    # clearing the selection also syncs
+    points.selected_data = set()
+    assert selections() == (set(), set(), set())
+
+    m.cleanup()
+
+
+def test_labels_undo_redo_sync(make_napari_viewer, qtbot):
+    """Undo/redo on a Labels layer must sync the data across the main viewer and
+    both ortho views.
+
+    Undo/redo do not emit a paint/data event, so the plugin wraps the layers'
+    ``undo``/``redo`` methods to explicitly re-sync via ``_update_data``. This test
+    exercises that path in both directions (main -> ortho and ortho -> main).
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    labels = Labels(np.zeros((20, 20, 20), dtype=np.uint8))
+    viewer.add_layer(labels)
+
+    right = m.right_widget.vm_container.viewer_model.layers[0]
+    bottom = m.bottom_widget.vm_container.viewer_model.layers[0]
+
+    def counts():
+        """Number of voxels equal to 5 in each of the main view and ortho views."""
+        return (
+            int((labels.data == 5).sum()),
+            int((right.data == 5).sum()),
+            int((bottom.data == 5).sum()),
+        )
+
+    assert counts() == (0, 0, 0)
+
+    # An undoable edit on the main layer syncs to both ortho views.
+    idx = (np.array([5, 6, 7]), np.array([5, 6, 7]), np.array([5, 6, 7]))
+    labels.data_setitem(idx, 5)
+    assert counts() == (3, 3, 3)
+
+    # Undo on the main layer reverts the edit everywhere.
+    labels.undo()
+    assert counts() == (0, 0, 0)
+
+    # Redo on the main layer restores the edit everywhere.
+    labels.redo()
+    assert counts() == (3, 3, 3)
+
+    # Reverse direction: an undoable edit made on an ortho view layer, then
+    # undone from that same ortho layer, must also sync back to the main viewer.
+    right.data_setitem(
+        (np.array([1, 2, 3]), np.array([1, 2, 3]), np.array([1, 2, 3])), 5
+    )
+    assert counts() == (6, 6, 6)
+
+    right.undo()
+    assert counts() == (3, 3, 3)
 
     m.cleanup()
 
