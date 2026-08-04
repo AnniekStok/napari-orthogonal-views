@@ -406,13 +406,14 @@ class OrthoViewManager:
         self.main_controls_widget.show_checkbox.setChecked(False)
         self.main_controls_widget.show_checkbox.blockSignals(False)
 
+        if not self._shown:
+            return
+
+        # only disconnect what show() connected
         self.viewer.dims.events.order.disconnect(self.update_dims_order)
         self.viewer.dims.events.ndim.disconnect(
             self.update_screen_recorder_axes
         )
-
-        if not self._shown:
-            return
 
         if isinstance(self.right_widget, OrthoViewWidget):
             self.right_widget.cleanup()

@@ -401,6 +401,59 @@ def test_sync_connections_cleaned_up(make_napari_viewer, qtbot):
     m.cleanup()
 
 
+def test_layer_hook_connections_cleaned_up(make_napari_viewer, qtbot):
+    """Connections a layer hook makes on the *original* layer must be released again.
+
+    A hook closes over the copied layer, so a connection that survives hiding the
+    orthogonal views keeps a discarded copy alive and updated: the work (and the
+    memory) then grows with every hide/show cycle.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+
+    labels = Labels(np.zeros((5, 20, 20), dtype=np.uint8))
+    labels.name = "labels"
+    viewer.add_layer(labels)
+
+    notified = []
+
+    def hook(orig_layer, copied_layer):
+        """Hook reporting its connections, so they can be cleaned up again."""
+
+        def on_opacity(event):
+            notified.append(copied_layer)
+
+        orig_layer.events.opacity.connect(on_opacity)
+        return [(orig_layer.events.opacity, on_opacity)]
+
+    m.register_layer_hook(Labels, hook)
+
+    def bump_opacity():
+        notified.clear()
+        labels.opacity = 0.5 if labels.opacity != 0.5 else 0.6
+        return len(notified)
+
+    assert "undo" not in labels.__dict__
+    assert bump_opacity() == 0  # no views yet
+
+    for _ in range(3):
+        show_orthogonal_views(viewer)
+        qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+        # exactly one live hook connection per orthogonal view, never more
+        assert bump_opacity() == 2
+        assert "undo" in labels.__dict__  # undo/redo wrapped for syncing
+
+        m.hide()
+
+        # ... and nothing left behind afterwards, however often this is repeated
+        assert bump_opacity() == 0
+        assert "undo" not in labels.__dict__
+
+    m.cleanup()
+
+
 def test_points_selection_sync(make_napari_viewer, qtbot):
     """Point ``selected_data`` must sync as a whole set in order to work for both single
     and multi-selections.

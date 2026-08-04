@@ -2,7 +2,6 @@ import contextlib
 import warnings
 from collections.abc import Callable, Iterator
 from functools import partial
-from types import MethodType
 from typing import Any
 
 import napari
@@ -38,6 +37,92 @@ def copy_layer(layer: Layer, name: str = "") -> Layer:
 
 def _sync_guard(*args: Any, **kwargs: Any) -> None:
     """No-op placeholder slot used to protect real sync handlers from being skipped."""
+
+
+_UNDO_REDO_HOOK = "_ortho_undo_redo_hook"
+
+
+class _UndoRedoHook:
+    """Replaces ``undo``/``redo`` on a layer so they also sync to other layers.
+
+    Installed at most once per layer: every orthogonal view registers a
+    ``(target_layer, update_fn)`` subscription on the same hook instead of wrapping
+    the methods again. Chained wrappers could not be removed independently -- taking
+    one view away would either strand the other view's wrapper or leave a wrapper
+    referencing a discarded copy -- while subscriptions can be removed in any order.
+
+    The original methods are put back as soon as the last subscription is gone.
+    """
+
+    def __init__(self, layer: Layer) -> None:
+        self.layer = layer
+        self.subscriptions: list[tuple[Layer, Callable]] = []
+        self._original = {
+            name: getattr(layer, name) for name in ("undo", "redo")
+        }
+        self._had_own = {
+            name: name in layer.__dict__ for name in ("undo", "redo")
+        }
+        self._previous = {
+            name: layer.__dict__.get(name) for name in ("undo", "redo")
+        }
+        for name in ("undo", "redo"):
+            layer.__dict__[name] = self._make_wrapper(name)
+        self._installed = {
+            name: layer.__dict__[name] for name in ("undo", "redo")
+        }
+        layer.__dict__[_UNDO_REDO_HOOK] = self
+
+    def _make_wrapper(self, name: str) -> Callable:
+        def wrapper() -> None:
+            self._original[name]()
+            for target, update_fn in list(self.subscriptions):
+                update_fn(source=self.layer, target=target)
+
+        return wrapper
+
+    def subscribe(self, target: Layer, update_fn: Callable) -> None:
+        self.subscriptions.append((target, update_fn))
+
+    def unsubscribe(self, target: Layer, update_fn: Callable) -> None:
+        with contextlib.suppress(ValueError):
+            self.subscriptions.remove((target, update_fn))
+        if self.subscriptions:
+            return
+        self._uninstall()
+
+    def _uninstall(self) -> None:
+        """Restore the layer's own undo/redo, unless something wrapped them since."""
+
+        for name in ("undo", "redo"):
+            if self.layer.__dict__.get(name) is not self._installed[name]:
+                continue
+            if self._had_own[name]:
+                self.layer.__dict__[name] = self._previous[name]
+            else:
+                self.layer.__dict__.pop(name, None)
+        if self.layer.__dict__.get(_UNDO_REDO_HOOK) is self:
+            self.layer.__dict__.pop(_UNDO_REDO_HOOK, None)
+
+
+def _subscribe_undo_redo(
+    source_layer: Layer, target_layer: Layer, update_fn: Callable
+) -> Callable:
+    """Make ``source_layer.undo()``/``redo()`` also update ``target_layer``.
+
+    Returns a callable that removes the subscription again, so an original layer never
+    keeps syncing to a copied layer that no longer exists.
+    """
+
+    hook = source_layer.__dict__.get(_UNDO_REDO_HOOK)
+    if hook is None:
+        hook = _UndoRedoHook(source_layer)
+    hook.subscribe(target_layer, update_fn)
+
+    def unsubscribe() -> None:
+        hook.unsubscribe(target_layer, update_fn)
+
+    return unsubscribe
 
 
 def _connect_sync_signal(
@@ -189,6 +274,10 @@ class ViewerModelContainer:
         # their nested objects, keyed by id(orig_layer), so they can be
         # disconnected again when the layer is removed.
         self._layer_connections: dict[int, list[tuple[Any, Callable]]] = {}
+
+        # Non-connection cleanup for the same layers (e.g. restoring methods that
+        # were wrapped on the original layer), keyed by id(orig_layer) as well.
+        self._layer_teardowns: dict[int, list[Callable]] = {}
 
         # Add crosshair overlays (initially invisible)
         self.crosshair_overlay = CrosshairOverlay(
@@ -417,10 +506,50 @@ class ViewerModelContainer:
         target_layer.selected_data = set(source_layer.selected_data)
         self._block = False
 
-    def set_layer_hooks(self, hooks: dict[type, list[Callable]]) -> None:
-        """Replace current hook mapping to allow special handling of certain layer types."""
+    def set_layer_hooks(
+        self, hooks: dict[type, list[Callable]] | None
+    ) -> None:
+        """Replace current hook mapping to allow special handling of certain layer types.
 
-        self._layer_hooks = hooks
+        The mapping is stored by reference (not copied) so hooks registered after the
+        orthogonal views are shown still reach the layers added afterwards.
+        """
+
+        self._layer_hooks = {} if hooks is None else hooks
+
+    @staticmethod
+    def _register_hook_result(
+        result: Any,
+        bucket: list[tuple[Any, Callable]],
+        teardowns: list[Callable],
+    ) -> None:
+        """Record whatever a layer hook did, so it can be undone again on cleanup.
+
+        A hook receives the original layer and may connect to its signals. Those
+        connections outlive the copied layer they close over unless they are tracked
+        here, which would keep dead copies alive and being updated (once per hide/show
+        cycle). To allow that, a hook may return an iterable containing:
+
+        - ``(signal, handler)`` pairs it connected, and/or
+        - zero-argument callables that undo anything else it changed.
+
+        Anything else (including ``None``) is ignored, so hooks written against the
+        older contract keep working -- their connections are then simply not cleaned
+        up again.
+
+        Args:
+            result: whatever the hook returned.
+            bucket (list): list collecting the (signal, slot) connections of this layer.
+            teardowns (list): list collecting the cleanup callables of this layer.
+        """
+
+        if not result:
+            return
+        for item in result:
+            if isinstance(item, tuple) and len(item) == 2:
+                bucket.append(item)
+            elif callable(item):
+                teardowns.append(item)
 
     def add_layer(self, orig_layer: Layer, index: int) -> None:
         """Set the layers of the contained ViewerModel."""
@@ -433,6 +562,7 @@ class ViewerModelContainer:
         # Collect every connection made for this layer so it can be cleaned up
         # again when the layer is removed (see remove_layer_connections).
         bucket = self._layer_connections.setdefault(id(orig_layer), [])
+        teardowns = self._layer_teardowns.setdefault(id(orig_layer), [])
 
         # sync name
         def sync_name_wrapper(event):
@@ -449,28 +579,16 @@ class ViewerModelContainer:
 
             # Calling the Undo/Redo function on the labels layer should also refresh the
             # other views.
-            def wrap_undo_redo(
-                source_layer: Labels, target_layer: Labels, update_fn: Callable
-            ):
-                """Wrap undo and redo methods to trigger syncing via update_fn"""
-                orig_undo = source_layer.undo
-                orig_redo = source_layer.redo
-
-                def wrapped_undo(self):
-                    orig_undo()
-                    update_fn(source=self, target=target_layer)
-
-                def wrapped_redo(self):
-                    orig_redo()
-                    update_fn(source=self, target=target_layer)
-
-                # Replace methods on the instance
-                source_layer.undo = MethodType(wrapped_undo, source_layer)
-                source_layer.redo = MethodType(wrapped_redo, source_layer)
-
-            # Wrap undo/redo
-            wrap_undo_redo(copied_layer, orig_layer, self._update_data)
-            wrap_undo_redo(orig_layer, copied_layer, self._update_data)
+            teardowns.append(
+                _subscribe_undo_redo(
+                    copied_layer, orig_layer, self._update_data
+                )
+            )
+            teardowns.append(
+                _subscribe_undo_redo(
+                    orig_layer, copied_layer, self._update_data
+                )
+            )
 
             # if the original layer is a labels layer, we want to connect to the paint
             # event, because we need it in order to invoke syncing between the different
@@ -522,7 +640,21 @@ class ViewerModelContainer:
         for hook_type, hooks in self._layer_hooks.items():
             if isinstance(orig_layer, hook_type):
                 for hook in hooks:
-                    hook(orig_layer, copied_layer)
+                    self._register_hook_result(
+                        hook(orig_layer, copied_layer), bucket, teardowns
+                    )
+
+    def _cleanup_layer(self, key: int) -> None:
+        """Disconnect the tracked connections and run the teardowns stored under
+        ``key`` (an id(orig_layer))."""
+
+        for signal, handler in self._layer_connections.pop(key, []):
+            with contextlib.suppress(ValueError, RuntimeError, TypeError):
+                signal.disconnect(handler)
+
+        for teardown in self._layer_teardowns.pop(key, []):
+            with contextlib.suppress(ValueError, RuntimeError, TypeError):
+                teardown()
 
     def remove_layer_connections(self, orig_layer: Layer) -> None:
         """Disconnect and forget every sync connection made for ``orig_layer``.
@@ -532,17 +664,13 @@ class ViewerModelContainer:
         and keep mutating/referencing it.
         """
 
-        for signal, handler in self._layer_connections.pop(id(orig_layer), []):
-            with contextlib.suppress(ValueError, RuntimeError, TypeError):
-                signal.disconnect(handler)
+        self._cleanup_layer(id(orig_layer))
 
     def disconnect_all(self) -> None:
         """Disconnect every tracked sync connection across all layers."""
 
-        for key in list(self._layer_connections):
-            for signal, handler in self._layer_connections.pop(key, []):
-                with contextlib.suppress(ValueError, RuntimeError, TypeError):
-                    signal.disconnect(handler)
+        for key in list(self._layer_connections) + list(self._layer_teardowns):
+            self._cleanup_layer(key)
 
 
 class OrthoViewWidget(QWidget):
@@ -560,8 +688,11 @@ class OrthoViewWidget(QWidget):
         super().__init__()
         self.viewer = viewer
         self.viewer.axes.visible = True
-        self.viewer.axes.events.visible.connect(
-            self._set_orth_views_dims_order
+
+        # Connections on the main viewer, tracked so cleanup() releases them again
+        self._connections: list[tuple[EventEmitter, Callable]] = []
+        self._connect(
+            self.viewer.axes.events.visible, self._set_orth_views_dims_order
         )
         self.order = order
         if sync_axes is None:
@@ -604,7 +735,6 @@ class OrthoViewWidget(QWidget):
             )
 
         # Connect to events
-        self._connections = []
 
         # Layer events
         self._connect(self.viewer.layers.events.inserted, self._layer_added)
