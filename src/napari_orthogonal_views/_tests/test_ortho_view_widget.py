@@ -364,6 +364,82 @@ def test_colormap_sync(make_napari_viewer, qtbot):
     m.cleanup()
 
 
+def test_sync_filters_apply_to_nested_properties(make_napari_viewer, qtbot):
+    """sync_filters must cover nested properties, not just the layer's own ones.
+
+    A layer that is filtered out entirely ("*") should end up with no property
+    connections at all -- previously its nested overlays (bounding box, name overlay,
+    text, ...) were still wired up in both directions. Individual nested properties can
+    be named as "<attr>.<property>".
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    m.set_sync_filters(
+        {
+            Image: {"forward_exclude": "*", "reverse_exclude": "*"},
+            Points: {"forward_exclude": {"text.size"}},
+        }
+    )
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    img = Image(np.zeros((5, 20, 20)))
+    img.name = "img"
+    viewer.add_layer(img)
+    points = Points(
+        [[1, 1, 1], [2, 2, 2]], name="points", text={"string": "x"}
+    )
+    viewer.add_layer(points)
+
+    container = m.right_widget.vm_container
+    copied_img = container.viewer_model.layers["img"]
+    copied_points = container.viewer_model.layers["points"]
+
+    # nothing at all is synced for the fully excluded layer, nested included
+    img.opacity = 0.25
+    img.bounding_box.visible = True
+    assert copied_img.opacity != 0.25
+    assert copied_img.bounding_box.visible is False
+
+    # the individually named nested property is not synced ...
+    points.text.size = 23
+    assert copied_points.text.size != 23
+
+    # ... while its siblings still are
+    points.text.visible = False
+    assert copied_points.text.visible is False
+    points.bounding_box.visible = True
+    assert copied_points.bounding_box.visible is True
+
+    m.cleanup()
+
+
+def test_layer_reference_to_viewer_is_not_synced(make_napari_viewer, qtbot):
+    """A viewer held by a layer must not be discovered as a nested evented object.
+
+    Layer subclasses sometimes keep a reference to the viewer they live in. That is a
+    whole viewer's state (theme, status, title, ...), not a layer property, and syncing
+    it would wire the ortho viewer models to the main viewer.
+    """
+
+    viewer = make_napari_viewer()
+
+    class LayerWithViewer(Image):
+        pass
+
+    layer = LayerWithViewer(np.zeros((5, 20, 20)))
+    layer.viewer = viewer
+
+    nested = [
+        list(item.keys())[0]
+        for item in get_property_names(layer)
+        if isinstance(item, dict)
+    ]
+    assert "viewer" not in nested
+    assert "bounding_box" in nested  # ... other nested models are still found
+
+
 def test_sync_connections_cleaned_up(make_napari_viewer, qtbot):
     """Removing a layer must disconnect the sync connections made on the original
     layer, so they do not outlive the removed copied layer and keep mutating it.

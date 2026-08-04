@@ -245,6 +245,11 @@ def get_property_names(
             if isinstance(attr, Colormap | Selection):
                 continue
 
+            # Skip viewers: a layer may hold a reference to the viewer it belongs to
+            # (napari does not, but subclasses might), so skip this explicitly.
+            if isinstance(attr, ViewerModel):
+                continue
+
             # detect nested evented objects
             if (
                 hasattr(attr, "events")
@@ -379,6 +384,10 @@ class ViewerModelContainer:
         """Sync properties between orig_layer and copied_layer, applying optional
         sync_filters. Automatically discovers and syncs nested object properties.
 
+        Nested properties are filtered as well: ``"*"`` blocks them along with
+        everything else, and they can be named individually as ``"<attr>.<property>"``
+        (e.g. ``"text.size"``).
+
         Args:
             orig_layer: Original layer to sync from
             copied_layer: Copied layer to sync to
@@ -412,10 +421,17 @@ class ViewerModelContainer:
                             if hasattr(orig_nested, prop_name) and hasattr(
                                 copied_nested, prop_name
                             ):
+                                nested_name = f"{nested_attr}.{prop_name}"
                                 self._setup_property_sync(
                                     orig_nested,
                                     copied_nested,
                                     prop_name,
+                                    not is_excluded(
+                                        orig_layer, nested_name, "forward"
+                                    ),
+                                    not is_excluded(
+                                        orig_layer, nested_name, "reverse"
+                                    ),
                                     bucket=bucket,
                                 )
             else:
