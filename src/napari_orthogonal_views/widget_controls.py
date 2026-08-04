@@ -262,14 +262,11 @@ class CenterWidget(QCheckBox):
             )
 
             if state == 2:
-                # Align camera centers immediately
+                # Align the camera centers immediately, along the shared axes only
                 viewer_center = list(widget.viewer.camera.center)
-                viewer_center_reordered = [
-                    viewer_center[i] for i in widget.order
-                ]
                 widget_center = list(
                     widget.vm_container.viewer_model.camera.center
                 )
-                widget_center[-2] = viewer_center_reordered[-2]
-                widget_center[-1] = viewer_center_reordered[-1]
+                for axis in widget.sync_axes:
+                    widget_center[axis] = viewer_center[axis]
                 widget.vm_container.viewer_model.camera.center = widget_center

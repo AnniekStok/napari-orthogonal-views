@@ -786,6 +786,14 @@ class OrthoViewWidget(QWidget):
         # Adjust dimension order for orthogonal views
         self._set_orth_views_dims_order()
 
+        # Position dims to  where the main viewer is looking without emitting event
+        self._block_center = True
+        self.vm_container.viewer_model.dims.point = self.viewer.dims.point
+        self._block_center = False
+
+        # reset the view to frame the data in the orthogonal view as well
+        self.vm_container.viewer_model.reset_view()
+
     def _connect(self, emitter: EventEmitter, handler: Callable) -> None:
         """Connect an event emitter to a function handler and add it to the list of
         connections."""

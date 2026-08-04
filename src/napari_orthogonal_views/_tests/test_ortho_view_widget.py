@@ -3,6 +3,7 @@ import collections
 import numpy as np
 from napari.layers import Image, Labels, Points
 
+from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
 from napari_orthogonal_views.ortho_view_manager import (
     _get_manager,
     show_orthogonal_views,
@@ -775,6 +776,93 @@ def test_layer_hook(make_napari_viewer, qtbot):
 
     # Now the original layer's selected_label should be 5
     assert viewer.layers[0].selected_label == 5
+
+    m.cleanup()
+
+
+def crosshair_position(qt_viewer):
+    """Return the world position the crosshair visual is currently drawn at."""
+
+    for overlay, visual in qt_viewer.canvas._overlay_to_visual.items():
+        if isinstance(overlay, CrosshairOverlay):
+            visual = visual[0] if isinstance(visual, list) else visual
+            return np.asarray(visual.node._pos)[0]
+    raise AssertionError("no crosshair overlay on this canvas")
+
+
+def test_ortho_views_open_where_the_main_viewer_is_looking(
+    make_napari_viewer, qtbot
+):
+    """Showing the orthogonal views must position them, and the crosshairs, sensibly.
+
+    The copied layers are inserted into the viewer models directly, which skips the
+    positioning napari does when a first layer is added, and the crosshair visual starts
+    at the world origin until a step event moves it. Together that opened the orthogonal
+    views on an arbitrary (usually empty) slice with the crosshairs in a corner.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+
+    labels = Labels(np.zeros((5, 30, 40, 50), dtype=np.uint8))
+    viewer.add_layer(labels)
+
+    # navigate the sliders somewhere specific first
+    viewer.dims.current_step = (3, 7, 0, 0)
+    before = list(viewer.dims.current_step)
+
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    # the displayed axes are centred on the data ...
+    dims = viewer.dims
+    for axis in dims.displayed:
+        assert dims.current_step[axis] == int((dims.nsteps[axis] - 1) / 2)
+
+    # ... while the sliders stay where the user left them
+    for axis in dims.not_displayed:
+        assert dims.current_step[axis] == before[axis]
+
+    # both orthogonal views look at the same position as the main viewer
+    for widget in (m.right_widget, m.bottom_widget):
+        assert widget.vm_container.viewer_model.dims.point == dims.point
+
+    # and every crosshair is drawn there, not at the world origin
+    m.set_cross_hairs(True)
+    for qt_viewer in (
+        viewer.window._qt_viewer,
+        m.right_widget.qt_viewer,
+        m.bottom_widget.qt_viewer,
+    ):
+        assert not np.allclose(crosshair_position(qt_viewer)[:2], 0)
+
+    m.cleanup()
+
+
+def test_register_layer_hook_is_idempotent(make_napari_viewer, qtbot):
+    """Registering the same hook twice must not run it twice per layer.
+
+    The manager is cached per viewer, so an application's setup routine can easily run
+    again for the same viewer.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+
+    calls = []
+
+    def hook(orig_layer, copied_layer):
+        calls.append(copied_layer)
+
+    m.register_layer_hook(Labels, hook)
+    m.register_layer_hook(Labels, hook)
+    assert m._layer_hooks[Labels] == [hook]
+
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+    viewer.add_layer(Labels(np.zeros((5, 20, 20), dtype=np.uint8)))
+
+    assert len(calls) == 2  # once per orthogonal view, not twice
 
     m.cleanup()
 

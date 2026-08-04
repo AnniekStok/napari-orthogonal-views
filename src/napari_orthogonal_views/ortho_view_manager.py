@@ -288,9 +288,11 @@ class OrthoViewManager:
         self.main_controls_widget.controls_widget.grid_widget.setChecked(state)
 
     def register_layer_hook(self, layer_type: type, hook: Callable) -> None:
-        """Register a hook to be applied to any matching layer type."""
+        """Register a hook to be applied to any matching layer type, do not allow duplicates."""
 
-        self._layer_hooks.setdefault(layer_type, []).append(hook)
+        hooks = self._layer_hooks.setdefault(layer_type, [])
+        if hook not in hooks:
+            hooks.append(hook)
 
     def set_sync_filters(
         self, sync_filters: dict[type[Layer], dict[str, set[str] | str]]
@@ -391,11 +393,29 @@ class OrthoViewManager:
 
         self._shown = True
 
+        # put the crosshairs somewhere the orthogonal views actually show something
+        self.center_crosshairs()
+
         # activate specific checkboxes by default (grid is excluded)
         if self.activate_checkboxes:
             self.set_cross_hairs(True)
             self.set_zoom_sync(True)
             self.set_center_sync(True)
+
+    def center_crosshairs(self) -> None:
+        """Move the crosshairs to the middle of the data along the displayed axes.
+
+        Only the displayed axes are moved, so the sliders (usually time, and z while the
+        main viewer shows xy) stay where the user left them. Along the displayed axes the
+        position is otherwise wherever napari left it, which tends to be a corner of the
+        data - and a corner is exactly where the orthogonal views have nothing to show.
+        """
+
+        dims = self.viewer.dims
+        step = list(dims.current_step)
+        for axis in dims.displayed:
+            step[axis] = int((dims.nsteps[axis] - 1) / 2)
+        dims.current_step = step
 
     def hide(self) -> None:
         """Remove the OrthoViewWidgets and replace with empty QWidget placeholders. Make

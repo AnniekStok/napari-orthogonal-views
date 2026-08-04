@@ -107,6 +107,7 @@ class VispyCrosshairOverlay(ViewerOverlayMixin, VispySceneOverlay):
         self.overlay = overlay
         self.overlay.events.axis_order.connect(self._on_axis_order_change)
         super().reset()  # reset to make sure the overlay is not visible too early
+        self._move_crosshairs()  # start at the current step, not at the world origin
 
     def _on_axis_order_change(self, event=None):
         """Update the colors of the crosshairs when overlay axis order changes."""
