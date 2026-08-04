@@ -1,3 +1,5 @@
+import collections
+
 import numpy as np
 from napari.layers import Image, Labels, Points
 
@@ -551,6 +553,53 @@ def test_labels_undo_redo_sync(make_napari_viewer, qtbot):
 
     right.undo()
     assert counts() == (3, 3, 3)
+
+    m.cleanup()
+
+
+def test_paint_makes_every_other_view_redraw(make_napari_viewer, qtbot):
+    """Painting in one view must make all the other views redraw.
+
+    The copied layers hold the very same array as the original, so comparing their data
+    cannot tell whether the others were notified -- an edit is visible in all of them
+    either way. Count their redraws instead. This matters because ``_update_data`` skips
+    re-assigning an array a layer already holds, and has to emit the data event itself
+    for the remaining views to hear about the edit.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    labels = Labels(np.zeros((20, 20, 20), dtype=np.uint8))
+    viewer.add_layer(labels)
+
+    right = m.right_widget.vm_container.viewer_model.layers[0]
+    bottom = m.bottom_widget.vm_container.viewer_model.layers[0]
+    assert right.data is labels.data
+    assert bottom.data is labels.data
+
+    redraws = collections.Counter()
+    for name, layer in (
+        ("main", labels),
+        ("right", right),
+        ("bottom", bottom),
+    ):
+        layer.events.set_data.connect(
+            lambda event, name=name: redraws.update([name])
+        )
+
+    # painting in the main viewer reaches both ortho views
+    labels.data_setitem((np.array([5]), np.array([5]), np.array([5])), 5)
+    assert redraws["right"] > 0
+    assert redraws["bottom"] > 0
+
+    # painting in one ortho view reaches the main viewer and the *other* ortho view
+    redraws.clear()
+    right.data_setitem((np.array([6]), np.array([6]), np.array([6])), 5)
+    assert redraws["main"] > 0
+    assert redraws["bottom"] > 0
 
     m.cleanup()
 

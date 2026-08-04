@@ -440,15 +440,27 @@ class ViewerModelContainer:
         """Copy data from source layer to target layer, which triggers a data event on
         the target layer. Block syncing to itself (VM1 -> orig -> VM1 is blocked, but
         VM1 -> orig -> VM2 is not blocked)
+
+        Copied layers share the original's array, and painting writes into it in place,
+        so usually both layers already hold the very same object. Assigning it again
+        would only redo the layer's dims/extent bookkeeping, so in that case the target
+        is refreshed and the data event is emitted directly instead.
+
         Args:
             source: the source Labels layer
             target: the target Labels layer"""
 
         self._block = True  # no syncing to itself is necessary
-        target.data = (
-            source.data
-        )  # trigger data event so that it can sync to other viewer models (only if
-        # target layer is orig_layer)
+        if target.data is source.data:
+            target.refresh()
+            target.events.data(
+                value=target.data
+            )  # reaches other viewer models
+        else:
+            target.data = (
+                source.data
+            )  # trigger data event so that it can sync to other viewer models (only if
+            # target layer is orig_layer)
         self._block = False
 
     def _sync_name(
