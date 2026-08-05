@@ -1,9 +1,13 @@
 import collections
 
 import numpy as np
+import pytest
 from napari.layers import Image, Labels, Points
 
 from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
+from napari_orthogonal_views.layer_sync_hooks import (
+    DEFAULT_LAYER_HOOKS,
+)
 from napari_orthogonal_views.ortho_view_manager import (
     _get_manager,
     show_orthogonal_views,
@@ -369,9 +373,8 @@ def test_sync_filters_apply_to_nested_properties(make_napari_viewer, qtbot):
     """sync_filters must cover nested properties, not just the layer's own ones.
 
     A layer that is filtered out entirely ("*") should end up with no property
-    connections at all -- previously its nested overlays (bounding box, name overlay,
-    text, ...) were still wired up in both directions. Individual nested properties can
-    be named as "<attr>.<property>".
+    connections at all, including nested overlays (bounding box, name overlay)
+    Individual nested properties can be named as "<attr>.<property>".
     """
 
     viewer = make_napari_viewer()
@@ -497,7 +500,7 @@ def test_layer_hook_connections_cleaned_up(make_napari_viewer, qtbot):
 
     notified = []
 
-    def hook(orig_layer, copied_layer):
+    def hook(container, orig_layer, copied_layer):
         """Hook reporting its connections, so they can be cleaned up again."""
 
         def on_opacity(event):
@@ -583,7 +586,7 @@ def test_labels_undo_redo_sync(make_napari_viewer, qtbot):
     both ortho views.
 
     Undo/redo do not emit a paint/data event, so the plugin wraps the layers'
-    ``undo``/``redo`` methods to explicitly re-sync via ``_update_data``. This test
+    ``undo``/``redo`` methods to explicitly re-sync via ``update_data``. This test
     exercises that path in both directions (main -> ortho and ortho -> main).
     """
 
@@ -639,7 +642,7 @@ def test_paint_makes_every_other_view_redraw(make_napari_viewer, qtbot):
 
     The copied layers hold the very same array as the original, so comparing their data
     cannot tell whether the others were notified -- an edit is visible in all of them
-    either way. Count their redraws instead. This matters because ``_update_data`` skips
+    either way. Count their redraws instead. This matters because ``update_data`` skips
     re-assigning an array a layer already holds, and has to emit the data event itself
     for the remaining views to hear about the edit.
     """
@@ -696,7 +699,7 @@ def test_layer_hook(make_napari_viewer, qtbot):
 
     # Test whether we can elicit a response on the source layer by clicking on a copied
     # layer.
-    def test_hook(orig_layer: Labels, copied_layer: Labels):
+    def test_hook(container, orig_layer: Labels, copied_layer: Labels):
 
         # define the click behavior the layer should respond to
         def click(orig_layer, layer, event):
@@ -851,18 +854,149 @@ def test_register_layer_hook_is_idempotent(make_napari_viewer, qtbot):
 
     calls = []
 
-    def hook(orig_layer, copied_layer):
+    def hook(container, orig_layer, copied_layer):
         calls.append(copied_layer)
 
     m.register_layer_hook(Labels, hook)
     m.register_layer_hook(Labels, hook)
-    assert m._layer_hooks[Labels] == [hook]
+    assert [entry for entry in m.layer_hooks.values() if entry[1] is hook] == [
+        (Labels, hook)
+    ]
 
     show_orthogonal_views(viewer)
     qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
     viewer.add_layer(Labels(np.zeros((5, 20, 20), dtype=np.uint8)))
 
     assert len(calls) == 2  # once per orthogonal view, not twice
+
+    m.cleanup()
+
+
+def test_legacy_two_argument_layer_hook_still_runs(make_napari_viewer, qtbot):
+    """Hooks written against the old (orig_layer, copied_layer) signature keep working,
+    but warn."""
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+
+    calls = []
+
+    def legacy_hook(orig_layer, copied_layer):
+        calls.append(copied_layer)
+
+    m.register_layer_hook(Labels, legacy_hook)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    with pytest.warns(DeprecationWarning, match="legacy_hook"):
+        viewer.add_layer(Labels(np.zeros((5, 20, 20), dtype=np.uint8)))
+
+    assert len(calls) == 2
+
+    m.cleanup()
+
+
+def test_default_hooks_are_installed_without_registering_anything(
+    make_napari_viewer, qtbot
+):
+    """The built-in behaviour must not depend on an application registering hooks."""
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    assert dict(m.layer_hooks) == DEFAULT_LAYER_HOOKS
+    for widget in (m.right_widget, m.bottom_widget):
+        container = widget.vm_container
+        labels = Labels(np.zeros((5, 20, 20), dtype=np.uint8))
+        assert [h.__name__ for h in container._hooks_for(labels)] == [
+            "sync_labels_undo_redo",
+            "sync_labels_paint",
+        ]
+        points = Points(np.zeros((1, 3)))
+        assert [h.__name__ for h in container._hooks_for(points)] == [
+            "sync_points_selection"
+        ]
+
+    m.cleanup()
+
+
+def test_built_in_hook_can_be_replaced_or_switched_off(
+    make_napari_viewer, qtbot
+):
+    """An application that handles a behaviour itself must be able to take the built-in
+    one out, by name, without touching the rest."""
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+
+    calls = []
+
+    def replacement(container, orig_layer, copied_layer):
+        calls.append(copied_layer)
+
+    m.set_layer_hook("labels_paint", replacement)
+    m.set_layer_hook("points_selection", None)
+
+    with pytest.raises(KeyError, match="no layer hook named"):
+        m.set_layer_hook("not_a_hook", replacement)
+
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    viewer.add_layer(Labels(np.zeros((5, 20, 20), dtype=np.uint8)))
+    viewer.add_layer(Points(np.zeros((1, 3))))
+
+    assert len(calls) == 2  # the replacement ran, once per orthogonal view
+
+    for widget in (m.right_widget, m.bottom_widget):
+        container = widget.vm_container
+        names = [h.__name__ for h in container._hooks_for(viewer.layers[0])]
+        assert names == ["sync_labels_undo_redo", "replacement"]
+        # the disabled one is gone, and it took its syncing with it
+        assert list(container._hooks_for(viewer.layers[1])) == []
+
+    viewer.layers[1].selected_data = {0}
+    for widget in (m.right_widget, m.bottom_widget):
+        copied_points = widget.vm_container.viewer_model.layers[1]
+        assert set(copied_points.selected_data) == set()
+
+    m.cleanup()
+
+
+def test_copy_layer_can_be_replaced(make_napari_viewer, qtbot):
+    """Applications must be able to decide how their layers are copied into the views.
+
+    A layer subclass may need something else entirely on the orthogonal views, so the
+    copy function is an injection point rather than something to monkeypatch.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+
+    class AppLabels(Labels):
+        """Stand-in for the layer type an application shows in the ortho views."""
+
+    def copy_via_app(layer, name=""):
+        copied = AppLabels(layer.data, name=layer.name)
+        copied.metadata["viewer_name"] = name
+        return copied
+
+    m.set_copy_layer(copy_via_app)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    viewer.add_layer(Labels(np.zeros((5, 20, 20), dtype=np.uint8), name="lbl"))
+
+    for widget in (m.right_widget, m.bottom_widget):
+        copied = widget.vm_container.viewer_model.layers["lbl"]
+        assert isinstance(copied, AppLabels)
+
+    # and the layer is still synced like any other
+    viewer.layers["lbl"].opacity = 0.25
+    for widget in (m.right_widget, m.bottom_widget):
+        assert widget.vm_container.viewer_model.layers["lbl"].opacity == 0.25
 
     m.cleanup()
 

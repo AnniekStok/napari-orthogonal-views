@@ -1,4 +1,5 @@
 import contextlib
+import inspect
 import warnings
 from collections.abc import Callable, Iterator
 from functools import partial
@@ -17,6 +18,7 @@ from qtpy.QtWidgets import (
 )
 
 from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
+from napari_orthogonal_views.layer_sync_hooks import DEFAULT_LAYER_HOOKS
 from napari_orthogonal_views.viewer_utils import activate_on_hover
 
 
@@ -35,94 +37,91 @@ def copy_layer(layer: Layer, name: str = "") -> Layer:
     return copied_layer
 
 
+# Used to copy layers into the orthogonal views unless an application substitutes its
+# own with :meth:`OrthoViewManager.set_copy_layer`
+DEFAULT_COPY_LAYER = copy_layer
+
+
+def _normalize_hook_registry(
+    hooks: dict | None,
+) -> dict[str, tuple[type, Callable | None]]:
+    """Return the layer hook registry to use, as ``{name: (layer_type, hook)}``.
+
+    A registry that is already in that form is returned unchanged (by reference, so
+    later registrations reach the containers that hold it). ``None`` gets a copy of the
+    built-in hooks, and the older ``{layer_type: [hook, ...]}`` mapping is converted,
+    naming each hook after itself.
+    """
+
+    if hooks is None:
+        return dict(DEFAULT_LAYER_HOOKS)
+
+    if all(isinstance(key, str) for key in hooks):
+        return hooks
+
+    converted: dict[str, tuple[type, Callable | None]] = dict(
+        DEFAULT_LAYER_HOOKS
+    )
+    for layer_type, type_hooks in hooks.items():
+        for hook in type_hooks:
+            converted[hook_name(hook)] = (layer_type, hook)
+    return converted
+
+
+def hook_name(hook: Callable) -> str:
+    """Name a hook after itself, for registrations that do not supply a name."""
+
+    return getattr(hook, "__qualname__", None) or repr(hook)
+
+
 def _sync_guard(*args: Any, **kwargs: Any) -> None:
     """No-op placeholder slot used to protect real sync handlers from being skipped."""
 
 
-_UNDO_REDO_HOOK = "_ortho_undo_redo_hook"
+def _hook_takes_container(hook: Callable) -> bool:
+    """Whether ``hook`` uses the current ``(container, orig_layer, copied_layer)``
+    signature, as opposed to the legacy ``(orig_layer, copied_layer)`` one.
 
-
-class _UndoRedoHook:
-    """Replaces ``undo``/``redo`` on a layer so they also sync to other layers.
-
-    Installed at most once per layer: every orthogonal view registers a
-    ``(target_layer, update_fn)`` subscription on the same hook instead of wrapping
-    the methods again. Chained wrappers could not be removed independently -- taking
-    one view away would either strand the other view's wrapper or leave a wrapper
-    referencing a discarded copy -- while subscriptions can be removed in any order.
-
-    The original methods are put back as soon as the last subscription is gone.
+    Anything whose signature cannot be read, or that accepts ``*args``, is assumed to
+    take the container.
     """
 
-    def __init__(self, layer: Layer) -> None:
-        self.layer = layer
-        self.subscriptions: list[tuple[Layer, Callable]] = []
-        self._original = {
-            name: getattr(layer, name) for name in ("undo", "redo")
-        }
-        self._had_own = {
-            name: name in layer.__dict__ for name in ("undo", "redo")
-        }
-        self._previous = {
-            name: layer.__dict__.get(name) for name in ("undo", "redo")
-        }
-        for name in ("undo", "redo"):
-            layer.__dict__[name] = self._make_wrapper(name)
-        self._installed = {
-            name: layer.__dict__[name] for name in ("undo", "redo")
-        }
-        layer.__dict__[_UNDO_REDO_HOOK] = self
+    try:
+        params = inspect.signature(hook).parameters.values()
+    except (TypeError, ValueError):
+        return True
 
-    def _make_wrapper(self, name: str) -> Callable:
-        def wrapper() -> None:
-            self._original[name]()
-            for target, update_fn in list(self.subscriptions):
-                update_fn(source=self.layer, target=target)
+    if any(p.kind is p.VAR_POSITIONAL for p in params):
+        return True
 
-        return wrapper
-
-    def subscribe(self, target: Layer, update_fn: Callable) -> None:
-        self.subscriptions.append((target, update_fn))
-
-    def unsubscribe(self, target: Layer, update_fn: Callable) -> None:
-        with contextlib.suppress(ValueError):
-            self.subscriptions.remove((target, update_fn))
-        if self.subscriptions:
-            return
-        self._uninstall()
-
-    def _uninstall(self) -> None:
-        """Restore the layer's own undo/redo, unless something wrapped them since."""
-
-        for name in ("undo", "redo"):
-            if self.layer.__dict__.get(name) is not self._installed[name]:
-                continue
-            if self._had_own[name]:
-                self.layer.__dict__[name] = self._previous[name]
-            else:
-                self.layer.__dict__.pop(name, None)
-        if self.layer.__dict__.get(_UNDO_REDO_HOOK) is self:
-            self.layer.__dict__.pop(_UNDO_REDO_HOOK, None)
+    positional = [
+        p
+        for p in params
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    ]
+    return len(positional) != 2
 
 
-def _subscribe_undo_redo(
-    source_layer: Layer, target_layer: Layer, update_fn: Callable
-) -> Callable:
-    """Make ``source_layer.undo()``/``redo()`` also update ``target_layer``.
+def _call_layer_hook(
+    hook: Callable,
+    container: "ViewerModelContainer",
+    orig_layer: Layer,
+    copied_layer: Layer,
+) -> Any:
+    """Call a layer hook, tolerating hooks written against the legacy signature."""
 
-    Returns a callable that removes the subscription again, so an original layer never
-    keeps syncing to a copied layer that no longer exists.
-    """
+    if _hook_takes_container(hook):
+        return hook(container, orig_layer, copied_layer)
 
-    hook = source_layer.__dict__.get(_UNDO_REDO_HOOK)
-    if hook is None:
-        hook = _UndoRedoHook(source_layer)
-    hook.subscribe(target_layer, update_fn)
-
-    def unsubscribe() -> None:
-        hook.unsubscribe(target_layer, update_fn)
-
-    return unsubscribe
+    warnings.warn(
+        f"Layer hook {getattr(hook, '__qualname__', hook)!r} takes "
+        "(orig_layer, copied_layer); layer hooks now take "
+        "(container, orig_layer, copied_layer). The two-argument form still works "
+        "but will be removed in a future release.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    return hook(orig_layer, copied_layer)
 
 
 def _connect_sync_signal(
@@ -267,13 +266,27 @@ class ViewerModelContainer:
     A container that holds a ViewerModel and manages synchronization.
     """
 
-    def __init__(self, title: str, order: tuple[int], sync_filters=None):
+    def __init__(
+        self,
+        title: str,
+        order: tuple[int],
+        sync_filters=None,
+        layer_hooks: dict[str, tuple[type, Callable | None]] | None = None,
+        copy_layer: Callable[[Layer, str], Layer] | None = None,
+    ):
         self.title = title
         self.viewer_model = ViewerModel(title)
         self.viewer_model.axes.visible = True
         self._block = False
-        self._layer_hooks: dict[type, list[Callable]] = {}
         self.sync_filters = sync_filters or {}
+
+        # Every per-layer-type behaviour, built-in and application, in one registry.
+        # Kept by reference when supplied, so registering or disabling a hook after the
+        # views are shown still reaches the layers added afterwards.
+        self._layer_hooks = _normalize_hook_registry(layer_hooks)
+
+        # How a layer is copied into this viewer model.
+        self.copy_layer = copy_layer or DEFAULT_COPY_LAYER
 
         # Track every (signal, slot) connection made on the original layers and
         # their nested objects, keyed by id(orig_layer), so they can be
@@ -452,10 +465,26 @@ class ViewerModelContainer:
                     bucket=bucket,
                 )
 
-    def _update_data(self, source: Labels, target: Labels) -> None:
+    @contextlib.contextmanager
+    def blocked(self) -> Iterator[None]:
+        """Suppress this container's sync handlers for the duration of the block.
+
+        Syncing writes to a layer, which makes that layer emit, which would sync
+        straight back. Handlers therefore check ``self._block`` and bail out while it
+        is set. The flag is per container, so blocking one orthogonal view does not
+        stop a change from reaching the other (VM1 -> orig -> VM1 is blocked, but
+        VM1 -> orig -> VM2 is not).
+        """
+
+        self._block = True
+        try:
+            yield
+        finally:
+            self._block = False
+
+    def update_data(self, source: Labels, target: Labels) -> None:
         """Copy data from source layer to target layer, which triggers a data event on
-        the target layer. Block syncing to itself (VM1 -> orig -> VM1 is blocked, but
-        VM1 -> orig -> VM2 is not blocked)
+        the target layer.
 
         Copied layers share the original's array, and painting writes into it in place,
         so usually both layers already hold the very same object. Assigning it again
@@ -466,18 +495,17 @@ class ViewerModelContainer:
             source: the source Labels layer
             target: the target Labels layer"""
 
-        self._block = True  # no syncing to itself is necessary
-        if target.data is source.data:
-            target.refresh()
-            target.events.data(
-                value=target.data
-            )  # reaches other viewer models
-        else:
-            target.data = (
-                source.data
-            )  # trigger data event so that it can sync to other viewer models (only if
-            # target layer is orig_layer)
-        self._block = False
+        with self.blocked():  # no syncing to itself is necessary
+            if target.data is source.data:
+                target.refresh()
+                target.events.data(
+                    value=target.data
+                )  # reaches other viewer models
+            else:
+                target.data = (
+                    source.data
+                )  # trigger data event so that it can sync to other viewer models
+                # (only if target layer is orig_layer)
 
     def _sync_name(
         self, orig_layer: Layer, copied_layer: Layer, event: Event
@@ -505,16 +533,15 @@ class ViewerModelContainer:
         if self._block:
             return
 
-        self._block = True
-        setattr(
-            target_layer,
-            property_name,
-            getattr(source_layer, property_name),
-        )
-        self._block = False
+        with self.blocked():
+            setattr(
+                target_layer,
+                property_name,
+                getattr(source_layer, property_name),
+            )
 
-    def _sync_selected_data(
-        self, source_layer: Points, target_layer: Points, _event: Event
+    def sync_selected_data(
+        self, source_layer: Points, target_layer: Points
     ) -> None:
         """Special sync function to sync the full point selection between two Points
         layers. ``points.selected_data`` is a Selection (an evented set). The whole set
@@ -530,20 +557,18 @@ class ViewerModelContainer:
         if self._block:
             return
 
-        self._block = True
-        target_layer.selected_data = set(source_layer.selected_data)
-        self._block = False
+        with self.blocked():
+            target_layer.selected_data = set(source_layer.selected_data)
 
-    def set_layer_hooks(
-        self, hooks: dict[type, list[Callable]] | None
-    ) -> None:
-        """Replace current hook mapping to allow special handling of certain layer types.
+    def set_layer_hooks(self, hooks: dict | None) -> None:
+        """Replace the whole layer hook registry.
 
-        The mapping is stored by reference (not copied) so hooks registered after the
-        orthogonal views are shown still reach the layers added afterwards.
+        The registry is stored by reference (not copied) so hooks registered, replaced
+        or disabled after the orthogonal views are shown still reach the layers added
+        afterwards. Passing None restores the built-in hooks.
         """
 
-        self._layer_hooks = {} if hooks is None else hooks
+        self._layer_hooks = _normalize_hook_registry(hooks)
 
     @staticmethod
     def _register_hook_result(
@@ -553,17 +578,9 @@ class ViewerModelContainer:
     ) -> None:
         """Record whatever a layer hook did, so it can be undone again on cleanup.
 
-        A hook receives the original layer and may connect to its signals. Those
-        connections outlive the copied layer they close over unless they are tracked
-        here, which would keep dead copies alive and being updated (once per hide/show
-        cycle). To allow that, a hook may return an iterable containing:
-
+        To allow cleanup of a hook after the layer is removed, the hook may return an iterable containing:
         - ``(signal, handler)`` pairs it connected, and/or
         - zero-argument callables that undo anything else it changed.
-
-        Anything else (including ``None``) is ignored, so hooks written against the
-        older contract keep working -- their connections are then simply not cleaned
-        up again.
 
         Args:
             result: whatever the hook returned.
@@ -583,7 +600,7 @@ class ViewerModelContainer:
         """Set the layers of the contained ViewerModel."""
 
         self.viewer_model.layers.insert(
-            index, copy_layer(orig_layer, self.title)
+            index, self.copy_layer(orig_layer, self.title)
         )
         copied_layer = self.viewer_model.layers[orig_layer.name]
 
@@ -602,75 +619,25 @@ class ViewerModelContainer:
         # sync properties
         self._sync_layer_properties(orig_layer, copied_layer, bucket)
 
-        # Special relevant labels layer syncing
-        if isinstance(orig_layer, Labels):
-
-            # Calling the Undo/Redo function on the labels layer should also refresh the
-            # other views.
-            teardowns.append(
-                _subscribe_undo_redo(
-                    copied_layer, orig_layer, self._update_data
-                )
-            )
-            teardowns.append(
-                _subscribe_undo_redo(
-                    orig_layer, copied_layer, self._update_data
-                )
+        # Special handling based on layer type, in registration order: the built-in
+        # behaviour first, then whatever the application registered.
+        for hook in self._hooks_for(orig_layer):
+            self._register_hook_result(
+                _call_layer_hook(hook, self, orig_layer, copied_layer),
+                bucket,
+                teardowns,
             )
 
-            # if the original layer is a labels layer, we want to connect to the paint
-            # event, because we need it in order to invoke syncing between the different
-            # viewers. (Paint event does not trigger 'data' event by itself).
-            # We do not need to connect to the eraser and fill bucket separately.
-            def copied_paint(_event):
-                # copy data from copied_layer to orig_layer (orig_layer emits signal,
-                # which triggers update on other viewer models, if present)
-                return self._update_data(
-                    source=copied_layer, target=orig_layer
-                )
+    def _hooks_for(self, layer: Layer) -> Iterator[Callable]:
+        """Yield the hooks that apply to ``layer``, in registration order.
 
-            def orig_paint(_event):
-                # copy data from orig_layer to copied_layer (copied_layer emits signal
-                # but we don't process it)
-                return self._update_data(
-                    source=orig_layer, target=copied_layer
-                )
+        Disabled entries (hook set to None) are skipped, which is how a built-in
+        behaviour is switched off by an application that handles it itself.
+        """
 
-            copied_layer.events.paint.connect(copied_paint)
-            orig_layer.events.paint.connect(orig_paint)
-            bucket.append((copied_layer.events.paint, copied_paint))
-            bucket.append((orig_layer.events.paint, orig_paint))
-
-        # # Special relevant 'selected_data' syncing for points layers
-        if isinstance(orig_layer, Points):
-
-            def orig_selection(event):
-                return self._sync_selected_data(
-                    orig_layer, copied_layer, event
-                )
-
-            def copied_selection(event):
-                return self._sync_selected_data(
-                    copied_layer, orig_layer, event
-                )
-
-            orig_signal = orig_layer.selected_data.events.items_changed
-            copied_signal = copied_layer.selected_data.events.items_changed
-            orig_signal.connect(orig_selection)
-            copied_signal.connect(copied_selection)
-            bucket.append((orig_signal, orig_selection))
-            bucket.append((copied_signal, copied_selection))
-
-            # initial sync
-            self._sync_selected_data(orig_layer, copied_layer, None)
-
-        # Special hooks based on layer type
-        for hook_type, hooks in self._layer_hooks.items():
-            if isinstance(orig_layer, hook_type):
-                for hook in hooks:
-                    self._register_hook_result(
-                        hook(orig_layer, copied_layer), bucket, teardowns
-                    )
+        for layer_type, hook in self._layer_hooks.values():
+            if hook is not None and isinstance(layer, layer_type):
+                yield hook
 
     def _cleanup_layer(self, key: int) -> None:
         """Disconnect the tracked connections and run the teardowns stored under
@@ -712,6 +679,7 @@ class OrthoViewWidget(QWidget):
         sync_axes: list[int] | None = None,
         sync_filters: dict | None = None,
         layer_hooks: dict | None = None,
+        copy_layer: Callable[[Layer, str], Layer] | None = None,
     ):
         super().__init__()
         self.viewer = viewer
@@ -729,15 +697,14 @@ class OrthoViewWidget(QWidget):
         self._grid_syncing = False
         self._block_center = False
         self._block_step = False
-        self._layer_hooks = layer_hooks
-
         # create container to store viewer model in
         self.vm_container = ViewerModelContainer(
-            title="orthogonal view", order=order, sync_filters=sync_filters
+            title="orthogonal view",
+            order=order,
+            sync_filters=sync_filters,
+            layer_hooks=layer_hooks,
+            copy_layer=copy_layer,
         )
-
-        # Add optional layer hooks
-        self.vm_container.set_layer_hooks(self._layer_hooks)
 
         # Create QtViewer instance with viewer model
         self.qt_viewer = QtViewer(self.vm_container.viewer_model)
@@ -786,7 +753,7 @@ class OrthoViewWidget(QWidget):
         # Adjust dimension order for orthogonal views
         self._set_orth_views_dims_order()
 
-        # Position dims to  where the main viewer is looking without emitting event
+        # Position dims to where the main viewer is looking without emitting event
         self._block_center = True
         self.vm_container.viewer_model.dims.point = self.viewer.dims.point
         self._block_center = False

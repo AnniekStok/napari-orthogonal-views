@@ -86,6 +86,64 @@ m.set_sync_filters(sync_filters)
 ```
 Then add 3D data (e.g. File > Open Sample > napari builtins > Balls (3D)). Activate the labels layer and change the contour value. You should see that the contour property is not synced from main viewer to orthoviews now.
 
+## Layer hooks
+Some syncing cannot be expressed as a property copy: painting on a Labels layer, undo/redo, and the point selection each need their own wiring. These are implemented as *layer hooks* in `layer_sync_hooks.py`, and are installed automatically — no setup needed to get the default behavior.
+
+A hook is called once per layer, per orthogonal view:
+
+```python
+def my_hook(container, orig_layer, copied_layer):
+    ...
+```
+
+`container` is the `ViewerModelContainer` that owns `copied_layer`. It gives access to the shared syncing primitives — `container.update_data(source, target)`, `container.sync_selected_data(source, target)` and `container.blocked()` — so a hook does not have to reimplement the guard that stops a sync from echoing back to its source.
+
+Layers can be removed while the orthogonal views stay open, so a hook has to report what it did. It returns an iterable mixing `(signal, handler)` pairs it connected and zero-argument callables that undo anything else; returning `None` means it left nothing behind.
+
+### Adding behavior
+`register_layer_hook` attaches an extra hook to a layer type, and runs after the built-in ones:
+
+```python
+from napari_orthogonal_views.ortho_view_manager import _get_manager
+from napari.layers import Labels
+
+m = _get_manager(viewer)
+
+def report_clicks(container, orig_layer, copied_layer):
+    def click(layer, event):
+        orig_layer.selected_label = layer.get_value(
+            event.position,
+            view_direction=event.view_direction,
+            dims_displayed=event.dims_displayed,
+            world=True,
+        )
+
+    copied_layer.mouse_drag_callbacks.append(click)
+    return [lambda: copied_layer.mouse_drag_callbacks.remove(click)]
+
+m.register_layer_hook(Labels, report_clicks)
+```
+
+### Overriding the built-in behavior
+The built-in hooks are keyed by name (`labels_undo_redo`, `labels_paint`, `points_selection`) so a single one can be replaced without disturbing the others. Use this to keep the default behavior and add to it:
+
+```python
+from napari_orthogonal_views.layer_sync_hooks import sync_labels_paint
+
+def paint_and_recount(container, orig_layer, copied_layer):
+    cleanup = sync_labels_paint(container, orig_layer, copied_layer)
+
+    def on_paint(_event):
+        my_app.recount_labels(orig_layer)
+
+    copied_layer.events.paint.connect(on_paint)
+    return [*cleanup, (copied_layer.events.paint, on_paint)]
+
+m.set_default_hook("labels_paint", paint_and_recount)
+```
+
+Passing `None` disables a built-in entirely. `set_default_hook` and `register_layer_hook` may be called after the orthogonal views are shown; the change then applies to layers added from that point on.
+
 ## Screen recording
 The 'Screen recording' tab offers a quick way to save a stitched image of the viewer with its orthogonal views. It is also possible to slide along a given axis and record a movie that is saved as a .avi file.
 
