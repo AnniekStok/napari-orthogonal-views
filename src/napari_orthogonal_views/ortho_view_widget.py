@@ -17,6 +17,11 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from napari_orthogonal_views.axes_utils import (
+    axes_visible,
+    get_axes,
+    set_axes_visible,
+)
 from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
 from napari_orthogonal_views.viewer_utils import activate_on_hover
 
@@ -180,7 +185,7 @@ class ViewerModelContainer:
     def __init__(self, title: str, order: tuple[int], sync_filters=None):
         self.title = title
         self.viewer_model = ViewerModel(title)
-        self.viewer_model.axes.visible = True
+        set_axes_visible(self.viewer_model, True)
         self._block = False
         self._layer_hooks: dict[type, list[Callable]] = {}
         self.sync_filters = sync_filters or {}
@@ -559,8 +564,8 @@ class OrthoViewWidget(QWidget):
     ):
         super().__init__()
         self.viewer = viewer
-        self.viewer.axes.visible = True
-        self.viewer.axes.events.visible.connect(
+        set_axes_visible(self.viewer, True)
+        get_axes(self.viewer).events.visible.connect(
             self._set_orth_views_dims_order
         )
         self.order = order
@@ -675,7 +680,9 @@ class OrthoViewWidget(QWidget):
         ]
 
         # whether or not the axis should be visible
-        self.vm_container.viewer_model.axes.visible = self.viewer.axes.visible
+        set_axes_visible(
+            self.vm_container.viewer_model, axes_visible(self.viewer)
+        )
 
     def _reset_view(self) -> None:
         """Propagate the reset view event"""
