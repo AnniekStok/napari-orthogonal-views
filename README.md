@@ -87,7 +87,7 @@ m.set_sync_filters(sync_filters)
 Then add 3D data (e.g. File > Open Sample > napari builtins > Balls (3D)). Activate the labels layer and change the contour value. You should see that the contour property is not synced from main viewer to orthoviews now.
 
 ## Layer hooks
-Some syncing cannot be expressed as a property copy: painting on a Labels layer, undo/redo, and the point selection each need their own wiring. These are implemented as *layer hooks* in `layer_sync_hooks.py`, and are installed automatically — no setup needed to get the default behavior.
+Some syncing cannot be expressed as a property copy: painting on a Labels layer, undo/redo, and the point selection each need their own wiring. These are implemented as *layer hooks* in `layer_sync_hooks.py`, and are installed automatically.
 
 A hook is called once per layer, per orthogonal view:
 
@@ -97,16 +97,6 @@ def my_hook(orig_layer, copied_layer):
 ```
 
 Layers can be removed while the orthogonal views stay open, so a hook has to report what it did. It returns an iterable mixing `(signal, handler)` pairs it connected and zero-argument callables that undo anything else; returning `None` means it left nothing behind.
-
-Most syncing needs nothing more than the right event. `data` is synced like any other layer property, so an edit napari makes *without* emitting `data` (painting, undo/redo) only has to be announced — that is all the built-in Labels hooks do:
-
-```python
-from napari_orthogonal_views.layer_sync_hooks import emit_data
-
-emit_data(layer)  # the property syncing takes it from here, to every other view
-```
-
-A hook that instead writes to the other layer itself has to keep its own write from coming straight back at it; `sync_points_selection` shows that pattern.
 
 ### Adding behavior
 `register_layer_hook` attaches an extra hook to a layer type, and runs after the built-in ones:

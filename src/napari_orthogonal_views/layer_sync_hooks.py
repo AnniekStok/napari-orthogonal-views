@@ -1,18 +1,13 @@
 """Built-in, per-layer-type syncing behaviour, expressed as layer hooks.
 
 These functions are the default behaviour of the orthogonal views, and are applied to
-every layer that matches their type. They are also the reference implementation of the
-hook contract.
-
-They are registered like any other hook, under the names in ``DEFAULT_LAYER_HOOKS``, so
-an application can add its own alongside them
+every layer that matches their type. They are registered like any other hook, under the
+names in ``DEFAULT_LAYER_HOOKS``, so an application can add its own alongside them
 (``manager.register_layer_hook(layer_type, hook)``), replace one
 (``manager.set_layer_hook("labels_paint", my_hook)``), or switch one off when it handles
 that behaviour itself (``manager.set_layer_hook("labels_paint", None)``).
 
-Hook contract
--------------
-A hook is called once per layer, per orthogonal view, in registration order, as::
+A hook is called once per layer, per orthogonal view, in registration order, as:
 
     hook(orig_layer, copied_layer)
 
@@ -24,11 +19,6 @@ the orthogonal views stay open. A hook therefore returns an iterable mixing:
 
 Returning ``None`` is allowed, and means the hook left nothing behind.
 
-Most syncing needs nothing more than the right event: the orthogonal views already sync
-``data`` like any other layer property, so an edit that napari performs without emitting
-``data`` only has to be announced (see :func:`emit_data`) for the views to pick it up.
-A hook that instead writes to the other layer itself has to make sure its own write does
-not come straight back at it - see :func:`sync_points_selection` for the pattern.
 """
 
 import contextlib
@@ -44,10 +34,9 @@ def emit_data(layer: Layer) -> None:
     """Announce that ``layer``'s array changed in place.
 
     napari does not emit ``data`` for every edit it makes to a layer (painting and
-    undo/redo change the array without it), and the orthogonal views sync ``data`` like
-    any other property, so such an edit stays invisible to them. Emitting the event is
-    all a hook has to do - the property syncing carries it to every other view from
-    there, in whichever direction the edit was made.
+    undo/redo change the array without it). Emitting the event is all a hook has to do
+     because the property syncing carries it to every other view, in whichever
+     direction the edit was made.
     """
 
     layer.events.data(value=layer.data)
@@ -123,8 +112,8 @@ class _UndoRedoPatch(_LayerPatch):
 
     Undo and redo restore the array in place and emit nothing at all, so they are
     wrapped on the instance. The original layer and its copies share one undo/redo
-    history (see ``copy_layer``), so the stacks stay in step by themselves; only the
-    news of the change has to travel.
+    history, but they need to be notified when the array has updated so that they can
+    refresh.
 
     The original methods are put back as soon as the last orthogonal view is gone,
     unless something else wrapped them in the meantime.
@@ -211,9 +200,9 @@ def sync_points_selection(
     property, so it is synced here instead of through the generic property syncing,
     which would only carry its single ``active`` element.
 
-    Unlike the Labels hooks, this one writes to the other layer itself, which makes that
-    layer emit and would sync straight back. ``syncing`` is what stops that: it is per
-    layer pair, so the other orthogonal view still hears about the change.
+    Unlike the Labels hooks, this writes to the other layer itself, which makes that
+    layer emit and would sync straight back, so a flag (``syncing``) is needed to prevent
+     that.
 
     Args:
         orig_layer: the layer on the main viewer.
@@ -228,7 +217,7 @@ def sync_points_selection(
     def push(source: Points, target: Points) -> None:
         nonlocal syncing
         if syncing:
-            return  # our own write, coming back at us
+            return  # do not sync back
         syncing = True
         try:
             target.selected_data = set(source.selected_data)
@@ -251,8 +240,7 @@ def sync_points_selection(
     return [(orig_signal, orig_selection), (copied_signal, copied_selection)]
 
 
-# The built-in hooks. They seed the layer hook registry, which is keyed by name so a
-# single one can be replaced or disabled without disturbing the others.
+# Define built-in hooks
 DEFAULT_LAYER_HOOKS: dict[str, tuple[type, Callable]] = {
     "labels_undo_redo": (Labels, sync_labels_undo_redo),
     "labels_paint": (Labels, sync_labels_paint),

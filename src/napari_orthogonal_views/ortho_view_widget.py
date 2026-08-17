@@ -36,8 +36,7 @@ def copy_layer(layer: Layer, name: str = "") -> Layer:
     return copied_layer
 
 
-# Used to copy layers into the orthogonal views unless an application substitutes its
-# own with :meth:`OrthoViewManager.set_copy_layer`
+# Used to copy layers into the orthogonal views unless an application defines its own.
 DEFAULT_COPY_LAYER = copy_layer
 
 

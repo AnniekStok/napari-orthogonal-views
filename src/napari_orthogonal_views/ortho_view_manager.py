@@ -108,7 +108,7 @@ class OrthoViewManager:
             warnings.simplefilter("ignore")
             activate_on_hover(self.viewer.window.qt_viewer)
 
-        # Layer hooks, built-in and application, in one registry keyed by name. The
+        # Layer hooks, built-in and custom, in one registry keyed by name. The
         # built-ins are registered here like any other hook, so an application can
         # replace or switch off a single one (see set_layer_hook) without having to
         # reimplement the rest.
@@ -316,9 +316,7 @@ class OrthoViewManager:
         """Register a hook to be applied to any matching layer type.
 
         The hook is called as ``hook(orig_layer, copied_layer)`` once per layer, per
-        orthogonal view, in registration order (so after the built-in hooks, which are
-        registered first). See
-        :mod:`napari_orthogonal_views.layer_sync_hooks` for the full contract.
+        orthogonal view, in registration order.
 
         Args:
             layer_type (type): layer class (or tuple of classes) the hook applies to.
