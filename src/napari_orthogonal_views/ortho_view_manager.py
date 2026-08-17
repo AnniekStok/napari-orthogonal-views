@@ -23,6 +23,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from napari_orthogonal_views.axes_utils import set_axes_visible
 from napari_orthogonal_views.cross_hair_overlay import (
     CrosshairOverlay,
     VispyCrosshairOverlay,
@@ -257,7 +258,7 @@ class OrthoViewManager:
     def show_axes(self, state: int) -> None:
         """Show or hide the axes in the main viewer based on the checkbox state."""
         state = state == 2
-        self.viewer.axes.visible = state
+        set_axes_visible(self.viewer, state)
 
     def show_cross_hairs(self, state: int) -> None:
         """Show or hide the crosshairs overlay on all viewers"""
@@ -543,7 +544,7 @@ class OrthoViewManager:
         )  # minimal size for right and bottom
 
         # remove axis labels
-        self.viewer.axes.visible = False
+        set_axes_visible(self.viewer, False)
 
         self._shown = False
 

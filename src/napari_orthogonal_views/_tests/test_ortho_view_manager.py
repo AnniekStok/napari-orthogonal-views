@@ -4,6 +4,12 @@ import tempfile
 import numpy as np
 from qtpy.QtWidgets import QWidget
 
+from napari_orthogonal_views.axes_utils import (
+    AXES_POSITION,
+    HAS_FLOATING_AXES,
+    axes_visible,
+    get_axes,
+)
 from napari_orthogonal_views.ortho_view_manager import (
     _get_manager,
     hide_orthogonal_views,
@@ -283,5 +289,39 @@ def test_screen_record_with_views(make_napari_viewer, qtbot):
         # Check that file was created
         assert os.path.exists(filepath)
         assert os.path.getsize(filepath) > 0
+
+    m.cleanup()
+
+
+def test_show_axes(make_napari_viewer, qtbot):
+    """The axes of the main viewer and of both orthoviews follow the checkbox.
+
+    On napari >= 0.8 they are pinned to the top left corner of the canvas, so they stay
+    in view when zooming in or panning; older versions only have the axes drawn at the
+    world origin.
+    """
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.random.rand(32, 64, 64))
+
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    viewer_models = [
+        viewer,
+        m.right_widget.vm_container.viewer_model,
+        m.bottom_widget.vm_container.viewer_model,
+    ]
+
+    m.set_axes(True)
+    for view_model in viewer_models:
+        assert axes_visible(view_model)
+        if HAS_FLOATING_AXES:
+            assert get_axes(view_model).position == AXES_POSITION
+
+    m.set_axes(False)
+    for view_model in viewer_models:
+        assert not axes_visible(view_model)
 
     m.cleanup()
