@@ -92,13 +92,21 @@ Some syncing cannot be expressed as a property copy: painting on a Labels layer,
 A hook is called once per layer, per orthogonal view:
 
 ```python
-def my_hook(container, orig_layer, copied_layer):
+def my_hook(orig_layer, copied_layer):
     ...
 ```
 
-`container` is the `ViewerModelContainer` that owns `copied_layer`. It gives access to the shared syncing primitives — `container.update_data(source, target)`, `container.sync_selected_data(source, target)` and `container.blocked()` — so a hook does not have to reimplement the guard that stops a sync from echoing back to its source.
-
 Layers can be removed while the orthogonal views stay open, so a hook has to report what it did. It returns an iterable mixing `(signal, handler)` pairs it connected and zero-argument callables that undo anything else; returning `None` means it left nothing behind.
+
+Most syncing needs nothing more than the right event. `data` is synced like any other layer property, so an edit napari makes *without* emitting `data` (painting, undo/redo) only has to be announced — that is all the built-in Labels hooks do:
+
+```python
+from napari_orthogonal_views.layer_sync_hooks import emit_data
+
+emit_data(layer)  # the property syncing takes it from here, to every other view
+```
+
+A hook that instead writes to the other layer itself has to keep its own write from coming straight back at it; `sync_points_selection` shows that pattern.
 
 ### Adding behavior
 `register_layer_hook` attaches an extra hook to a layer type, and runs after the built-in ones:
@@ -109,7 +117,7 @@ from napari.layers import Labels
 
 m = _get_manager(viewer)
 
-def report_clicks(container, orig_layer, copied_layer):
+def report_clicks(orig_layer, copied_layer):
     def click(layer, event):
         orig_layer.selected_label = layer.get_value(
             event.position,
@@ -130,8 +138,8 @@ The built-in hooks are keyed by name (`labels_undo_redo`, `labels_paint`, `point
 ```python
 from napari_orthogonal_views.layer_sync_hooks import sync_labels_paint
 
-def paint_and_recount(container, orig_layer, copied_layer):
-    cleanup = sync_labels_paint(container, orig_layer, copied_layer)
+def paint_and_recount(orig_layer, copied_layer):
+    cleanup = sync_labels_paint(orig_layer, copied_layer)
 
     def on_paint(_event):
         my_app.recount_labels(orig_layer)
@@ -139,10 +147,10 @@ def paint_and_recount(container, orig_layer, copied_layer):
     copied_layer.events.paint.connect(on_paint)
     return [*cleanup, (copied_layer.events.paint, on_paint)]
 
-m.set_default_hook("labels_paint", paint_and_recount)
+m.set_layer_hook("labels_paint", paint_and_recount)
 ```
 
-Passing `None` disables a built-in entirely. `set_default_hook` and `register_layer_hook` may be called after the orthogonal views are shown; the change then applies to layers added from that point on.
+Passing `None` disables a built-in entirely. `set_layer_hook` and `register_layer_hook` may be called after the orthogonal views are shown; the change then applies to layers added from that point on.
 
 ## Screen recording
 The 'Screen recording' tab offers a quick way to save a stitched image of the viewer with its orthogonal views. It is also possible to slide along a given axis and record a movie that is saved as a .avi file.

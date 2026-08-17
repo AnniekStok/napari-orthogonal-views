@@ -14,12 +14,7 @@ Hook contract
 -------------
 A hook is called once per layer, per orthogonal view, in registration order, as::
 
-    hook(container, orig_layer, copied_layer)
-
-where ``container`` is the :class:`ViewerModelContainer` that owns ``copied_layer``.
-It exists so a hook can reach the shared syncing primitives -
-``container.update_data``, ``container.sync_selected_data`` and
-``container.blocked()``.
+    hook(orig_layer, copied_layer)
 
 Whatever a hook changes has to be undoable again, because layers can be removed while
 the orthogonal views stay open. A hook therefore returns an iterable mixing:
@@ -29,179 +24,198 @@ the orthogonal views stay open. A hook therefore returns an iterable mixing:
 
 Returning ``None`` is allowed, and means the hook left nothing behind.
 
+Most syncing needs nothing more than the right event: the orthogonal views already sync
+``data`` like any other layer property, so an edit that napari performs without emitting
+``data`` only has to be announced (see :func:`emit_data`) for the views to pick it up.
+A hook that instead writes to the other layer itself has to make sure its own write does
+not come straight back at it - see :func:`sync_points_selection` for the pattern.
 """
 
 import contextlib
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import Any
 
 from napari.layers import Labels, Layer, Points
 
-if TYPE_CHECKING:
-    from napari_orthogonal_views.ortho_view_widget import ViewerModelContainer
-
-_UNDO_REDO_HOOK = "_ortho_undo_redo_hook"
+_MISSING = object()
 
 
-class _UndoRedoHook:
-    """Replaces ``undo``/``redo`` on a layer so they also sync to other layers.
+def emit_data(layer: Layer) -> None:
+    """Announce that ``layer``'s array changed in place.
 
-    Installed at most once per layer: every orthogonal view registers a
-    ``(target_layer, update_fn)`` subscription on the same hook instead of wrapping
-    the methods again.
-
-    The original methods are put back as soon as the last subscription is gone.
+    napari does not emit ``data`` for every edit it makes to a layer (painting and
+    undo/redo change the array without it), and the orthogonal views sync ``data`` like
+    any other property, so such an edit stays invisible to them. Emitting the event is
+    all a hook has to do - the property syncing carries it to every other view from
+    there, in whichever direction the edit was made.
     """
+
+    layer.events.data(value=layer.data)
+
+
+class _LayerPatch:
+    """A patch installed on a layer once, however many orthogonal views want it.
+
+    Every view asks for the same behaviour on the same layer, so the patch is shared and
+    reference counted: :meth:`attach` returns the callable that drops one view's claim
+    on it, and the last one to let go puts the layer back the way it was.
+    """
+
+    #: attribute the patch parks itself under, on the layer it patches
+    key: str = ""
 
     def __init__(self, layer: Layer) -> None:
         self.layer = layer
-        self.subscriptions: list[tuple[Layer, Callable]] = []
+        self._uses = 0
+
+    @classmethod
+    def attach(cls, layer: Layer) -> Callable[[], None]:
+        """Install the patch on ``layer`` if it is not there yet, and return the
+        callable that releases this caller's claim on it."""
+
+        patch = layer.__dict__.get(cls.key)
+        if patch is None:
+            patch = cls(layer)
+            layer.__dict__[cls.key] = patch
+            patch._install()
+        patch._uses += 1
+        return patch._release
+
+    def _release(self) -> None:
+        self._uses -= 1
+        if self._uses > 0:
+            return
+        if self.layer.__dict__.get(self.key) is self:
+            self.layer.__dict__.pop(self.key, None)
+        self._uninstall()
+
+    def _install(self) -> None:
+        raise NotImplementedError
+
+    def _uninstall(self) -> None:
+        raise NotImplementedError
+
+
+class _PaintPatch(_LayerPatch):
+    """Emits ``data`` whenever a Labels layer is painted.
+
+    Painting emits a ``paint`` event but not a ``data`` event, so the edit would
+    otherwise never reach the other views. The eraser and the fill bucket emit the same
+    event, so they need no separate handling.
+    """
+
+    key = "_ortho_paint_patch"
+
+    def _install(self) -> None:
+        def on_paint(_event) -> None:
+            emit_data(self.layer)
+
+        self._handler = on_paint
+        self.layer.events.paint.connect(on_paint)
+
+    def _uninstall(self) -> None:
+        with contextlib.suppress(ValueError, RuntimeError, TypeError):
+            self.layer.events.paint.disconnect(self._handler)
+
+
+class _UndoRedoPatch(_LayerPatch):
+    """Emits ``data`` after ``undo``/``redo`` on a Labels layer.
+
+    Undo and redo restore the array in place and emit nothing at all, so they are
+    wrapped on the instance. The original layer and its copies share one undo/redo
+    history (see ``copy_layer``), so the stacks stay in step by themselves; only the
+    news of the change has to travel.
+
+    The original methods are put back as soon as the last orthogonal view is gone,
+    unless something else wrapped them in the meantime.
+    """
+
+    key = "_ortho_undo_redo_patch"
+    _METHODS = ("undo", "redo")
+
+    def _install(self) -> None:
         self._original = {
-            name: getattr(layer, name) for name in ("undo", "redo")
-        }
-        self._had_own = {
-            name: name in layer.__dict__ for name in ("undo", "redo")
+            name: getattr(self.layer, name) for name in self._METHODS
         }
         self._previous = {
-            name: layer.__dict__.get(name) for name in ("undo", "redo")
+            name: self.layer.__dict__.get(name, _MISSING)
+            for name in self._METHODS
         }
-        for name in ("undo", "redo"):
-            layer.__dict__[name] = self._make_wrapper(name)
+        for name in self._METHODS:
+            self.layer.__dict__[name] = self._wrap(name)
         self._installed = {
-            name: layer.__dict__[name] for name in ("undo", "redo")
+            name: self.layer.__dict__[name] for name in self._METHODS
         }
-        layer.__dict__[_UNDO_REDO_HOOK] = self
 
-    def _make_wrapper(self, name: str) -> Callable:
+    def _wrap(self, name: str) -> Callable:
         def wrapper() -> None:
             self._original[name]()
-            for target, update_fn in list(self.subscriptions):
-                update_fn(source=self.layer, target=target)
+            emit_data(self.layer)
 
         return wrapper
 
-    def subscribe(self, target: Layer, update_fn: Callable) -> None:
-        self.subscriptions.append((target, update_fn))
-
-    def unsubscribe(self, target: Layer, update_fn: Callable) -> None:
-        with contextlib.suppress(ValueError):
-            self.subscriptions.remove((target, update_fn))
-        if self.subscriptions:
-            return
-        self._uninstall()
-
     def _uninstall(self) -> None:
-        """Restore the layer's own undo/redo, unless something wrapped them since."""
-
-        for name in ("undo", "redo"):
+        for name in self._METHODS:
             if self.layer.__dict__.get(name) is not self._installed[name]:
-                continue
-            if self._had_own[name]:
-                self.layer.__dict__[name] = self._previous[name]
-            else:
+                continue  # something wrapped it since; leave that wrapper alone
+            if self._previous[name] is _MISSING:
                 self.layer.__dict__.pop(name, None)
-        if self.layer.__dict__.get(_UNDO_REDO_HOOK) is self:
-            self.layer.__dict__.pop(_UNDO_REDO_HOOK, None)
-
-
-def _subscribe_undo_redo(
-    source_layer: Layer, target_layer: Layer, update_fn: Callable
-) -> Callable:
-    """Make ``source_layer.undo()``/``redo()`` also update ``target_layer``.
-
-    Returns a callable that removes the subscription again, so an original layer never
-    keeps syncing to a copied layer that no longer exists.
-    """
-
-    hook = source_layer.__dict__.get(_UNDO_REDO_HOOK)
-    if hook is None:
-        hook = _UndoRedoHook(source_layer)
-    hook.subscribe(target_layer, update_fn)
-
-    def unsubscribe() -> None:
-        hook.unsubscribe(target_layer, update_fn)
-
-    return unsubscribe
+            else:
+                self.layer.__dict__[name] = self._previous[name]
 
 
 def sync_labels_undo_redo(
-    container: "ViewerModelContainer",
-    orig_layer: Labels,
-    copied_layer: Labels,
+    orig_layer: Labels, copied_layer: Labels
 ) -> list[Callable]:
-    """Make undo/redo on either layer refresh the other view.
-
-    Both layers share one undo/redo history (see ``copy_layer``), so the stacks stay in
-    step by themselves, but the layer that did not have the method called on it never
-    learns that its data changed underneath it.
+    """Make undo/redo on either layer reach the other views.
 
     Args:
-        container: the ViewerModelContainer owning ``copied_layer``.
         orig_layer: the layer on the main viewer.
         copied_layer: its counterpart in the orthogonal view.
 
     Returns:
-        The two unsubscribe callables, to be run on cleanup.
+        The two release callables, to be run on cleanup.
     """
 
     return [
-        _subscribe_undo_redo(copied_layer, orig_layer, container.update_data),
-        _subscribe_undo_redo(orig_layer, copied_layer, container.update_data),
+        _UndoRedoPatch.attach(orig_layer),
+        _UndoRedoPatch.attach(copied_layer),
     ]
 
 
 def sync_labels_paint(
-    container: "ViewerModelContainer",
-    orig_layer: Labels,
-    copied_layer: Labels,
-) -> list[tuple]:
-    """Mirror painting between the two layers.
-
-    Painting is connected explicitly because the paint event does not trigger a 'data'
-    event by itself, and syncing between viewers hangs off the latter. The eraser and
-    the fill bucket emit the same event, so they need no separate connection.
+    orig_layer: Labels, copied_layer: Labels
+) -> list[Callable]:
+    """Make painting on either layer reach the other views.
 
     Args:
-        container: the ViewerModelContainer owning ``copied_layer``.
         orig_layer: the layer on the main viewer.
         copied_layer: its counterpart in the orthogonal view.
 
     Returns:
-        The ``(signal, handler)`` pairs that were connected.
+        The two release callables, to be run on cleanup.
     """
 
-    def copied_paint(_event) -> None:
-        # copy data from copied_layer to orig_layer (orig_layer emits signal,
-        # which triggers update on other viewer models, if present)
-        container.update_data(source=copied_layer, target=orig_layer)
-
-    def orig_paint(_event) -> None:
-        # copy data from orig_layer to copied_layer (copied_layer emits signal
-        # but we don't process it)
-        container.update_data(source=orig_layer, target=copied_layer)
-
-    copied_layer.events.paint.connect(copied_paint)
-    orig_layer.events.paint.connect(orig_paint)
-
     return [
-        (copied_layer.events.paint, copied_paint),
-        (orig_layer.events.paint, orig_paint),
+        _PaintPatch.attach(orig_layer),
+        _PaintPatch.attach(copied_layer),
     ]
 
 
 def sync_points_selection(
-    container: "ViewerModelContainer",
-    orig_layer: Points,
-    copied_layer: Points,
-) -> list[tuple]:
+    orig_layer: Points, copied_layer: Points
+) -> list[tuple[Any, Callable]]:
     """Mirror the point selection between the two layers, and sync it once up front.
 
     ``points.selected_data`` is a Selection (an evented set) rather than a plain
     property, so it is synced here instead of through the generic property syncing,
     which would only carry its single ``active`` element.
 
+    Unlike the Labels hooks, this one writes to the other layer itself, which makes that
+    layer emit and would sync straight back. ``syncing`` is what stops that: it is per
+    layer pair, so the other orthogonal view still hears about the change.
+
     Args:
-        container: the ViewerModelContainer owning ``copied_layer``.
         orig_layer: the layer on the main viewer.
         copied_layer: its counterpart in the orthogonal view.
 
@@ -209,19 +223,30 @@ def sync_points_selection(
         The ``(signal, handler)`` pairs that were connected.
     """
 
-    def orig_selection(_event) -> None:
-        container.sync_selected_data(orig_layer, copied_layer)
+    syncing = False
 
-    def copied_selection(_event) -> None:
-        container.sync_selected_data(copied_layer, orig_layer)
+    def push(source: Points, target: Points) -> None:
+        nonlocal syncing
+        if syncing:
+            return  # our own write, coming back at us
+        syncing = True
+        try:
+            target.selected_data = set(source.selected_data)
+        finally:
+            syncing = False
+
+    def orig_selection(_event=None) -> None:
+        push(orig_layer, copied_layer)
+
+    def copied_selection(_event=None) -> None:
+        push(copied_layer, orig_layer)
 
     orig_signal = orig_layer.selected_data.events.items_changed
     copied_signal = copied_layer.selected_data.events.items_changed
     orig_signal.connect(orig_selection)
     copied_signal.connect(copied_selection)
 
-    # initial sync
-    container.sync_selected_data(orig_layer, copied_layer)
+    orig_selection()  # initial sync
 
     return [(orig_signal, orig_selection), (copied_signal, copied_selection)]
 

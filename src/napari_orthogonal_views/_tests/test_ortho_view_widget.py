@@ -500,7 +500,7 @@ def test_layer_hook_connections_cleaned_up(make_napari_viewer, qtbot):
 
     notified = []
 
-    def hook(container, orig_layer, copied_layer):
+    def hook(orig_layer, copied_layer):
         """Hook reporting its connections, so they can be cleaned up again."""
 
         def on_opacity(event):
@@ -586,7 +586,8 @@ def test_labels_undo_redo_sync(make_napari_viewer, qtbot):
     both ortho views.
 
     Undo/redo do not emit a paint/data event, so the plugin wraps the layers'
-    ``undo``/``redo`` methods to explicitly re-sync via ``update_data``. This test
+    ``undo``/``redo`` methods so that they emit the ``data`` event napari does not
+    emit for them, which the generic data syncing then carries. This test
     exercises that path in both directions (main -> ortho and ortho -> main).
     """
 
@@ -642,7 +643,7 @@ def test_paint_makes_every_other_view_redraw(make_napari_viewer, qtbot):
 
     The copied layers hold the very same array as the original, so comparing their data
     cannot tell whether the others were notified -- an edit is visible in all of them
-    either way. Count their redraws instead. This matters because ``update_data`` skips
+    either way. Count their redraws instead. This matters because the data syncing skips
     re-assigning an array a layer already holds, and has to emit the data event itself
     for the remaining views to hear about the edit.
     """
@@ -684,6 +685,39 @@ def test_paint_makes_every_other_view_redraw(make_napari_viewer, qtbot):
     m.cleanup()
 
 
+def test_paint_announces_the_data_event_once(make_napari_viewer, qtbot):
+    """Painting emits ``data`` on the layer that was painted, exactly once.
+
+    Painting emits ``paint`` and not ``data``, so the layers are patched to emit it.
+    That patch is shared by the orthogonal views rather than installed per view, so an
+    application listening on ``data`` hears about an edit once, not once per view.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    labels = Labels(np.zeros((20, 20, 20), dtype=np.uint8))
+    viewer.add_layer(labels)
+
+    announced = []
+    labels.events.data.connect(lambda event: announced.append(event))
+
+    labels.data_setitem((np.array([5]), np.array([5]), np.array([5])), 5)
+    assert len(announced) == 1
+
+    labels.undo()
+    assert len(announced) == 2
+
+    m.cleanup()
+
+    # the patches are gone again, so the layer stops announcing edits
+    announced.clear()
+    labels.data_setitem((np.array([7]), np.array([7]), np.array([7])), 5)
+    assert announced == []
+
+
 def test_layer_hook(make_napari_viewer, qtbot):
     """Test setting optional custom layer hooks. This is to forward specific
     events/outcomes to the original layer (could be a subclass) for further downstream
@@ -699,7 +733,7 @@ def test_layer_hook(make_napari_viewer, qtbot):
 
     # Test whether we can elicit a response on the source layer by clicking on a copied
     # layer.
-    def test_hook(container, orig_layer: Labels, copied_layer: Labels):
+    def test_hook(orig_layer: Labels, copied_layer: Labels):
 
         # define the click behavior the layer should respond to
         def click(orig_layer, layer, event):
@@ -854,7 +888,7 @@ def test_register_layer_hook_is_idempotent(make_napari_viewer, qtbot):
 
     calls = []
 
-    def hook(container, orig_layer, copied_layer):
+    def hook(orig_layer, copied_layer):
         calls.append(copied_layer)
 
     m.register_layer_hook(Labels, hook)
@@ -868,30 +902,6 @@ def test_register_layer_hook_is_idempotent(make_napari_viewer, qtbot):
     viewer.add_layer(Labels(np.zeros((5, 20, 20), dtype=np.uint8)))
 
     assert len(calls) == 2  # once per orthogonal view, not twice
-
-    m.cleanup()
-
-
-def test_legacy_two_argument_layer_hook_still_runs(make_napari_viewer, qtbot):
-    """Hooks written against the old (orig_layer, copied_layer) signature keep working,
-    but warn."""
-
-    viewer = make_napari_viewer()
-    m = _get_manager(viewer)
-
-    calls = []
-
-    def legacy_hook(orig_layer, copied_layer):
-        calls.append(copied_layer)
-
-    m.register_layer_hook(Labels, legacy_hook)
-    show_orthogonal_views(viewer)
-    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
-
-    with pytest.warns(DeprecationWarning, match="legacy_hook"):
-        viewer.add_layer(Labels(np.zeros((5, 20, 20), dtype=np.uint8)))
-
-    assert len(calls) == 2
 
     m.cleanup()
 
@@ -933,7 +943,7 @@ def test_built_in_hook_can_be_replaced_or_switched_off(
 
     calls = []
 
-    def replacement(container, orig_layer, copied_layer):
+    def replacement(orig_layer, copied_layer):
         calls.append(copied_layer)
 
     m.set_layer_hook("labels_paint", replacement)

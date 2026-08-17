@@ -315,9 +315,9 @@ class OrthoViewManager:
     ) -> None:
         """Register a hook to be applied to any matching layer type.
 
-        The hook is called as ``hook(container, orig_layer, copied_layer)`` once per
-        layer, per orthogonal view, in registration order (so after the built-in hooks,
-        which are registered first). See
+        The hook is called as ``hook(orig_layer, copied_layer)`` once per layer, per
+        orthogonal view, in registration order (so after the built-in hooks, which are
+        registered first). See
         :mod:`napari_orthogonal_views.layer_sync_hooks` for the full contract.
 
         Args:

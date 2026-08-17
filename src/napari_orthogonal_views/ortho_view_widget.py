@@ -1,5 +1,4 @@
 import contextlib
-import inspect
 import warnings
 from collections.abc import Callable, Iterator
 from functools import partial
@@ -7,7 +6,7 @@ from typing import Any
 
 import napari
 from napari.components.viewer_model import ViewerModel
-from napari.layers import Labels, Layer, Points
+from napari.layers import Labels, Layer
 from napari.qt import QtViewer
 from napari.utils.colormaps import Colormap
 from napari.utils.events import Event, EventEmitter
@@ -76,52 +75,6 @@ def hook_name(hook: Callable) -> str:
 
 def _sync_guard(*args: Any, **kwargs: Any) -> None:
     """No-op placeholder slot used to protect real sync handlers from being skipped."""
-
-
-def _hook_takes_container(hook: Callable) -> bool:
-    """Whether ``hook`` uses the current ``(container, orig_layer, copied_layer)``
-    signature, as opposed to the legacy ``(orig_layer, copied_layer)`` one.
-
-    Anything whose signature cannot be read, or that accepts ``*args``, is assumed to
-    take the container.
-    """
-
-    try:
-        params = inspect.signature(hook).parameters.values()
-    except (TypeError, ValueError):
-        return True
-
-    if any(p.kind is p.VAR_POSITIONAL for p in params):
-        return True
-
-    positional = [
-        p
-        for p in params
-        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
-    ]
-    return len(positional) != 2
-
-
-def _call_layer_hook(
-    hook: Callable,
-    container: "ViewerModelContainer",
-    orig_layer: Layer,
-    copied_layer: Layer,
-) -> Any:
-    """Call a layer hook, tolerating hooks written against the legacy signature."""
-
-    if _hook_takes_container(hook):
-        return hook(container, orig_layer, copied_layer)
-
-    warnings.warn(
-        f"Layer hook {getattr(hook, '__qualname__', hook)!r} takes "
-        "(orig_layer, copied_layer); layer hooks now take "
-        "(container, orig_layer, copied_layer). The two-argument form still works "
-        "but will be removed in a future release.",
-        DeprecationWarning,
-        stacklevel=3,
-    )
-    return hook(orig_layer, copied_layer)
 
 
 def _connect_sync_signal(
@@ -482,31 +435,6 @@ class ViewerModelContainer:
         finally:
             self._block = False
 
-    def update_data(self, source: Labels, target: Labels) -> None:
-        """Copy data from source layer to target layer, which triggers a data event on
-        the target layer.
-
-        Copied layers share the original's array, and painting writes into it in place,
-        so usually both layers already hold the very same object. Assigning it again
-        would only redo the layer's dims/extent bookkeeping, so in that case the target
-        is refreshed and the data event is emitted directly instead.
-
-        Args:
-            source: the source Labels layer
-            target: the target Labels layer"""
-
-        with self.blocked():  # no syncing to itself is necessary
-            if target.data is source.data:
-                target.refresh()
-                target.events.data(
-                    value=target.data
-                )  # reaches other viewer models
-            else:
-                target.data = (
-                    source.data
-                )  # trigger data event so that it can sync to other viewer models
-                # (only if target layer is orig_layer)
-
     def _sync_name(
         self, orig_layer: Layer, copied_layer: Layer, event: Event
     ) -> None:
@@ -534,31 +462,23 @@ class ViewerModelContainer:
             return
 
         with self.blocked():
-            setattr(
-                target_layer,
-                property_name,
-                getattr(source_layer, property_name),
-            )
-
-    def sync_selected_data(
-        self, source_layer: Points, target_layer: Points
-    ) -> None:
-        """Special sync function to sync the full point selection between two Points
-        layers. ``points.selected_data`` is a Selection (an evented set). The whole set
-        has to be synced, rather than its single ``active`` element, because ``active``
-        is None as soon as more than one point is selected, which would drop
-        multi-selections.
-
-        Args:
-            source_layer (Points)
-            target_layer (Points)
-        """
-
-        if self._block:
-            return
-
-        with self.blocked():
-            target_layer.selected_data = set(source_layer.selected_data)
+            if (
+                property_name == "data"
+                and target_layer.data is source_layer.data
+            ):
+                # The two layers hold the very same array (see copy_layer), so an edit
+                # made in place is already in both. Assigning it again would only redo
+                # the layer's dims/extent bookkeeping, so refresh the target instead,
+                # and pass the news on to the remaining views by emitting the event
+                # that the assignment would have emitted.
+                target_layer.refresh()
+                target_layer.events.data(value=target_layer.data)
+            else:
+                setattr(
+                    target_layer,
+                    property_name,
+                    getattr(source_layer, property_name),
+                )
 
     def set_layer_hooks(self, hooks: dict | None) -> None:
         """Replace the whole layer hook registry.
@@ -623,9 +543,7 @@ class ViewerModelContainer:
         # behaviour first, then whatever the application registered.
         for hook in self._hooks_for(orig_layer):
             self._register_hook_result(
-                _call_layer_hook(hook, self, orig_layer, copied_layer),
-                bucket,
-                teardowns,
+                hook(orig_layer, copied_layer), bucket, teardowns
             )
 
     def _hooks_for(self, layer: Layer) -> Iterator[Callable]:
@@ -664,7 +582,9 @@ class ViewerModelContainer:
     def disconnect_all(self) -> None:
         """Disconnect every tracked sync connection across all layers."""
 
-        for key in list(self._layer_connections) + list(self._layer_teardowns):
+        for key in dict.fromkeys(
+            (*self._layer_connections, *self._layer_teardowns)
+        ):
             self._cleanup_layer(key)
 
 
