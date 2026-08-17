@@ -140,6 +140,7 @@ class OrthoViewManager:
             ndim=self.viewer.dims.ndim,
             screenshot_callback=self.screenshot,
             screenrecord_callback=self.screen_record,
+            axis_length_callback=self.axis_length,
         )
 
         # Build orthogonal layout (splitters + widgets)
@@ -368,6 +369,9 @@ class OrthoViewManager:
         # Connect to signals that update the dims order in the main viewer
         self.viewer.dims.events.order.connect(self.update_dims_order)
         self.viewer.dims.events.ndim.connect(self.update_screen_recorder_axes)
+        self.viewer.dims.events.range.connect(
+            self.screen_recorder_widget.update_slice_range
+        )
 
         # Add controls to main_controls widget
         self.main_controls_widget.add_controls(
@@ -411,6 +415,9 @@ class OrthoViewManager:
         self.viewer.dims.events.ndim.disconnect(
             self.update_screen_recorder_axes
         )
+        self.viewer.dims.events.range.disconnect(
+            self.screen_recorder_widget.update_slice_range
+        )
 
         if not self._shown:
             return
@@ -452,6 +459,18 @@ class OrthoViewManager:
 
         self._shown = False
 
+    def axis_length(self, axis: int) -> int:
+        """Return the number of slices along the given axis of the main viewer.
+
+        Args:
+            axis (int): the axis to measure
+
+        Returns:
+            int: the number of slices along this axis
+        """
+
+        return int(self.viewer.dims.range[axis][1]) + 1
+
     def update_screen_recorder_axes(self):
         """When the number of dimensions is updated in the main viewer, also update the
         screen recorder widget's moving axis options"""
@@ -463,6 +482,7 @@ class OrthoViewManager:
             self.screen_recorder_widget.moving_axis.addItems(
                 moving_axis_options
             )
+            self.screen_recorder_widget.update_slice_range()
 
     def update_dims_order(self):
         """When the dimension order is updated in the main viewer, also update the dim
@@ -619,8 +639,11 @@ class OrthoViewManager:
         axis: int = 0,
         fps: int = 7,
         incl_timestamp: bool = False,
+        start=0,
         step=1,
         suffix: str = "hrs",
+        first_slice: int | None = None,
+        last_slice: int | None = None,
     ) -> None:
         """Move through a given axis viewer and collect screen shots to create a video.
 
@@ -631,14 +654,25 @@ class OrthoViewManager:
             axis (int): the axis along which to move for recording
             fps (int): frames per second for the output video
             incl_timestamp (bool): whether to include a timestamp in the video
+            start (float): the timestamp of the first slice to be recorded
             step (int): the step size to move along the axis for each frame
             suffix (str): the suffix to use for the timestamp
+            first_slice (int), optional: first slice to record (inclusive), defaults to 0
+            last_slice (int), optional: last slice to record (inclusive), defaults to the
+                last slice along the given axis
         """
 
-        n_frames = int(self.viewer.dims.range[axis][1]) + 1
+        n_frames = self.axis_length(axis)
+        first = 0 if first_slice is None else max(0, int(first_slice))
+        last = (
+            n_frames - 1
+            if last_slice is None
+            else min(n_frames - 1, int(last_slice))
+        )
+
         current_step = self.viewer.dims.current_step
         imgs = []
-        for i in tqdm.tqdm(range(n_frames)):
+        for i in tqdm.tqdm(range(first, last + 1)):
             new_step = list(current_step)
             new_step[axis] = i
             self.viewer.dims.current_step = new_step
@@ -647,7 +681,7 @@ class OrthoViewManager:
             )
             imgs.append(img)
 
-        self.write_avi(imgs, path, fps, incl_timestamp, step, suffix)
+        self.write_avi(imgs, path, fps, incl_timestamp, start, step, suffix)
 
     def write_avi(
         self,
@@ -655,6 +689,7 @@ class OrthoViewManager:
         out_path: str,
         fps: int = 7,
         incl_timestamp: bool = False,
+        start=0,
         step=1,
         suffix: str = "hrs",
     ) -> None:
@@ -665,6 +700,8 @@ class OrthoViewManager:
             out_path (str): output path for the video
             fps (int): frames per second for the output video
             incl_timestamp (bool): whether to include a timestamp in the video
+            start (float): the timestamp of the first slice to be recorded along the
+            axis, used as offset for calculating the timestamp.
             step (int): the step size to move along the axis for each frame, used for calculating the timestamp
             suffix (str): the suffix to use for the timestamp
         """
@@ -679,7 +716,7 @@ class OrthoViewManager:
             # Draw timestamp in top-left
             img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
             if incl_timestamp:
-                timestamp = f"{i*step:.2f} {suffix}"
+                timestamp = f"{start + i * step:.2f} {suffix}"
                 cv2.putText(
                     img,
                     timestamp,

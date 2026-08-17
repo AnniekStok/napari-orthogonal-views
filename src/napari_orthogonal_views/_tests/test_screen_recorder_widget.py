@@ -17,8 +17,14 @@ def test_screen_recorder_widget_initialization(qtbot):
     assert widget.bottom_view.isChecked()
     assert not widget.incl_timestamp.isChecked()
     assert widget.fps_spinbox.value() == 7
+    assert widget.time_start.value() == 0.0
     assert widget.time_step.value() == 1.0
     assert widget.suffix.text() == "hrs"
+
+    # timestamp options only show up when a timestamp is included
+    assert not widget.timestamp_options_widget.isVisibleTo(widget)
+    widget.incl_timestamp.setChecked(True)
+    assert widget.timestamp_options_widget.isVisibleTo(widget)
 
 
 def test_screen_recorder_widget_with_callbacks(qtbot):
@@ -103,14 +109,19 @@ def test_record_with_callback(qtbot):
     """Test record calls screenrecord callback with correct parameters."""
     screenrecord_cb = Mock()
 
-    widget = ScreenRecorderWidget(screenrecord_callback=screenrecord_cb)
+    widget = ScreenRecorderWidget(
+        screenrecord_callback=screenrecord_cb,
+        axis_length_callback=lambda axis: 10,
+    )
     widget.moving_axis.clear()
     widget.moving_axis.addItems(["0", "1", "2"])
     widget.moving_axis.setCurrentIndex(1)
+    widget.slice_range.setValue((2, 7))
     widget.right_view.setChecked(True)
     widget.bottom_view.setChecked(False)
     widget.fps_spinbox.setValue(15)
     widget.incl_timestamp.setChecked(True)
+    widget.time_start.setValue(1.5)
     widget.time_step.setValue(2.5)
     widget.suffix.setText("min")
 
@@ -131,9 +142,32 @@ def test_record_with_callback(qtbot):
             incl_bottom=False,
             fps=15,
             incl_timestamp=True,
+            start=1.5,
             step=2.5,
             suffix="min",
+            first_slice=2,
+            last_slice=7,
         )
+
+
+def test_slice_range_follows_moving_axis(qtbot):
+    """The slice range slider spans the full extent of the selected moving axis."""
+    axis_lengths = {0: 3, 1: 20}
+
+    widget = ScreenRecorderWidget(
+        ndim=2, axis_length_callback=lambda axis: axis_lengths[axis]
+    )
+    qtbot.addWidget(widget)
+
+    # initialized on the first axis
+    assert widget.slice_range.minimum() == 0
+    assert widget.slice_range.maximum() == 2
+    assert tuple(widget.slice_range.value()) == (0, 2)
+
+    # and follows the moving axis selection
+    widget.moving_axis.setCurrentText("1")
+    assert widget.slice_range.maximum() == 19
+    assert tuple(widget.slice_range.value()) == (0, 19)
 
 
 def test_record_cancelled(qtbot):
