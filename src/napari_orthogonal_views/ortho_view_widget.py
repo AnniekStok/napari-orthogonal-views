@@ -444,11 +444,13 @@ class ViewerModelContainer:
             ):
                 # The two layers hold the very same array (see copy_layer), so an edit
                 # made in place is already in both. Assigning it again would only redo
-                # the layer's dims/extent bookkeeping, so refresh the target instead,
-                # and pass the news on to the remaining views by emitting the event
-                # that the assignment would have emitted.
+                # the layer's dims/extent bookkeeping, so refresh the target instead.
                 target_layer.refresh()
-                target_layer.events.data(value=target_layer.data)
+
+                if target_layer not in self.viewer_model.layers:
+                    # The target is the layer on the main viewer, the only one the
+                    # other orthogonal views listen to, so it has to emit the event.
+                    target_layer.events.data(value=target_layer.data)
             else:
                 setattr(
                     target_layer,
