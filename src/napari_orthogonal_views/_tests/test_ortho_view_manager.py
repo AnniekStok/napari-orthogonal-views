@@ -1,5 +1,6 @@
 import os
 import tempfile
+from unittest.mock import patch
 
 import numpy as np
 from qtpy.QtWidgets import QWidget
@@ -291,6 +292,80 @@ def test_screen_record_with_views(make_napari_viewer, qtbot):
         assert os.path.getsize(filepath) > 0
 
     m.cleanup()
+
+
+def test_screen_record_slice_range(make_napari_viewer, qtbot):
+    """Only the slices within the requested range are recorded."""
+    viewer = make_napari_viewer()
+    data = np.random.rand(10, 32, 32, 32)  # T, Z, Y, X
+    viewer.add_image(data, name="test_data")
+
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    # the slider spans the full extent of the moving axis by default
+    recorder = m.screen_recorder_widget
+    assert recorder.moving_axis.currentText() == "0"
+    assert tuple(recorder.slice_range.value()) == (0, 9)
+
+    with (
+        tempfile.TemporaryDirectory() as tmpdir,
+        patch.object(m, "write_avi") as mock_write_avi,
+    ):
+        filepath = os.path.join(tmpdir, "test_recording_range.avi")
+        m.screen_record(
+            path=filepath, axis=0, first_slice=3, last_slice=6, fps=7
+        )
+
+        imgs, out_path, fps, incl_timestamp, start, step, suffix = (
+            mock_write_avi.call_args.args
+        )
+        assert len(imgs) == 4  # slices 3, 4, 5 and 6
+        assert out_path == filepath
+
+    # out of bounds values are clipped to the available slices
+    with (
+        tempfile.TemporaryDirectory() as tmpdir,
+        patch.object(m, "write_avi") as mock_write_avi,
+    ):
+        filepath = os.path.join(tmpdir, "test_recording_clipped.avi")
+        m.screen_record(
+            path=filepath, axis=0, first_slice=-5, last_slice=100, fps=7
+        )
+
+        assert len(mock_write_avi.call_args.args[0]) == 10
+
+    m.cleanup()
+
+
+def test_write_avi_timestamps(make_napari_viewer):
+    """Timestamps start at the given start value and follow the recorded slices."""
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+
+    imgs = [
+        np.zeros((32, 32, 4), dtype=np.uint8),
+        np.zeros((32, 32, 4), dtype=np.uint8),
+    ]
+
+    with (
+        tempfile.TemporaryDirectory() as tmpdir,
+        patch(
+            "napari_orthogonal_views.ortho_view_manager.cv2.putText"
+        ) as mock_put_text,
+    ):
+        m.write_avi(
+            imgs,
+            os.path.join(tmpdir, "timestamps.avi"),
+            incl_timestamp=True,
+            start=10,
+            step=0.5,
+            suffix="min",
+        )
+
+        timestamps = [call.args[1] for call in mock_put_text.call_args_list]
+        assert timestamps == ["10.00 min", "10.50 min"]
 
 
 def test_show_axes(make_napari_viewer, qtbot):
