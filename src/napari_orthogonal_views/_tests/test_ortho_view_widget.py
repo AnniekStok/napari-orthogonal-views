@@ -14,6 +14,7 @@ from napari_orthogonal_views.ortho_view_manager import (
 )
 from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
+    ViewerModelContainer,
     get_property_names,
 )
 
@@ -904,6 +905,38 @@ def test_register_layer_hook_is_idempotent(make_napari_viewer, qtbot):
     assert len(calls) == 2  # once per orthogonal view, not twice
 
     m.cleanup()
+
+
+def test_hook_result_registration():
+    """What a hook returns has to be either a connection or a teardown.
+
+    Returning a bare ``(signal, handler)`` pair rather than a list of them is the easy
+    mistake, and the one worth catching: signals are callable, so the pair would be
+    taken apart and the signal itself filed as a teardown, to be emitted on cleanup.
+    """
+
+    labels = Labels(np.zeros((5, 5, 5), dtype=np.uint8))
+    signal = labels.events.opacity
+
+    def handler(event): ...
+
+    def teardown(): ...
+
+    connections, teardowns = [], []
+    register = ViewerModelContainer._register_hook_result
+
+    register(None, connections, teardowns)  # a hook that left nothing behind
+    assert (connections, teardowns) == ([], [])
+
+    register([(signal, handler), teardown], connections, teardowns)
+    assert connections == [(signal, handler)]
+    assert teardowns == [teardown]
+
+    with pytest.raises(TypeError, match="a single pair has to be returned"):
+        register((signal, handler), connections, teardowns)  # missing the list
+
+    with pytest.raises(TypeError, match="zero-argument callables"):
+        register(["not a connection"], connections, teardowns)
 
 
 def test_default_hooks_are_installed_without_registering_anything(

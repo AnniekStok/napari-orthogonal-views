@@ -1,6 +1,6 @@
 import contextlib
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from functools import partial
 from typing import Any
 
@@ -39,32 +39,6 @@ def copy_layer(layer: Layer, name: str = "") -> Layer:
 # Used to copy layers into the orthogonal views unless an application substitutes its
 # own with :meth:`OrthoViewManager.set_copy_layer`
 DEFAULT_COPY_LAYER = copy_layer
-
-
-def _normalize_hook_registry(
-    hooks: dict | None,
-) -> dict[str, tuple[type, Callable | None]]:
-    """Return the layer hook registry to use, as ``{name: (layer_type, hook)}``.
-
-    A registry that is already in that form is returned unchanged (by reference, so
-    later registrations reach the containers that hold it). ``None`` gets a copy of the
-    built-in hooks, and the older ``{layer_type: [hook, ...]}`` mapping is converted,
-    naming each hook after itself.
-    """
-
-    if hooks is None:
-        return dict(DEFAULT_LAYER_HOOKS)
-
-    if all(isinstance(key, str) for key in hooks):
-        return hooks
-
-    converted: dict[str, tuple[type, Callable | None]] = dict(
-        DEFAULT_LAYER_HOOKS
-    )
-    for layer_type, type_hooks in hooks.items():
-        for hook in type_hooks:
-            converted[hook_name(hook)] = (layer_type, hook)
-    return converted
 
 
 def hook_name(hook: Callable) -> str:
@@ -236,7 +210,9 @@ class ViewerModelContainer:
         # Every per-layer-type behaviour, built-in and application, in one registry.
         # Kept by reference when supplied, so registering or disabling a hook after the
         # views are shown still reaches the layers added afterwards.
-        self._layer_hooks = _normalize_hook_registry(layer_hooks)
+        self._layer_hooks = (
+            dict(DEFAULT_LAYER_HOOKS) if layer_hooks is None else layer_hooks
+        )
 
         # How a layer is copied into this viewer model.
         self.copy_layer = copy_layer or DEFAULT_COPY_LAYER
@@ -480,41 +456,57 @@ class ViewerModelContainer:
                     getattr(source_layer, property_name),
                 )
 
-    def set_layer_hooks(self, hooks: dict | None) -> None:
-        """Replace the whole layer hook registry.
+    def set_layer_hooks(
+        self, hooks: dict[str, tuple[type, Callable | None]] | None
+    ) -> None:
+        """Replace the whole layer hook registry, ``{name: (layer_type, hook)}``.
 
         The registry is stored by reference (not copied) so hooks registered, replaced
         or disabled after the orthogonal views are shown still reach the layers added
         afterwards. Passing None restores the built-in hooks.
         """
 
-        self._layer_hooks = _normalize_hook_registry(hooks)
+        self._layer_hooks = (
+            dict(DEFAULT_LAYER_HOOKS) if hooks is None else hooks
+        )
 
     @staticmethod
     def _register_hook_result(
-        result: Any,
+        result: Iterable[tuple[Any, Callable] | Callable] | None,
         bucket: list[tuple[Any, Callable]],
         teardowns: list[Callable],
     ) -> None:
         """Record whatever a layer hook did, so it can be undone again on cleanup.
 
-        To allow cleanup of a hook after the layer is removed, the hook may return an iterable containing:
+        To allow cleanup of a hook after the layer is removed, the hook returns an
+        iterable containing:
         - ``(signal, handler)`` pairs it connected, and/or
         - zero-argument callables that undo anything else it changed.
+
+        Returning None means the hook left nothing behind.
 
         Args:
             result: whatever the hook returned.
             bucket (list): list collecting the (signal, slot) connections of this layer.
             teardowns (list): list collecting the cleanup callables of this layer.
+
+        Raises:
+            TypeError: if the hook returned anything else. Signals are callable, so a
+                single ``(signal, handler)`` pair returned outside a list would
+                otherwise be taken apart and its signal emitted during cleanup.
         """
 
-        if not result:
-            return
-        for item in result:
+        for item in result or ():
             if isinstance(item, tuple) and len(item) == 2:
                 bucket.append(item)
-            elif callable(item):
+            elif callable(item) and not hasattr(item, "connect"):
                 teardowns.append(item)
+            else:
+                raise TypeError(
+                    "a layer hook must return (signal, handler) pairs and/or "
+                    f"zero-argument callables, got {item!r}; a single pair has "
+                    "to be returned inside a list"
+                )
 
     def add_layer(self, orig_layer: Layer, index: int) -> None:
         """Set the layers of the contained ViewerModel."""
@@ -598,7 +590,7 @@ class OrthoViewWidget(QWidget):
         order=(-2, -3, -1),
         sync_axes: list[int] | None = None,
         sync_filters: dict | None = None,
-        layer_hooks: dict | None = None,
+        layer_hooks: dict[str, tuple[type, Callable | None]] | None = None,
         copy_layer: Callable[[Layer, str], Layer] | None = None,
     ):
         super().__init__()
