@@ -1,13 +1,12 @@
 import contextlib
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from functools import partial
-from types import MethodType
 from typing import Any
 
 import napari
 from napari.components.viewer_model import ViewerModel
-from napari.layers import Labels, Layer, Points
+from napari.layers import Labels, Layer
 from napari.qt import QtViewer
 from napari.utils.colormaps import Colormap
 from napari.utils.events import Event, EventEmitter
@@ -23,6 +22,7 @@ from napari_orthogonal_views.axes_utils import (
     set_axes_visible,
 )
 from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
+from napari_orthogonal_views.layer_sync_hooks import DEFAULT_LAYER_HOOKS
 from napari_orthogonal_views.viewer_utils import activate_on_hover
 
 
@@ -39,6 +39,16 @@ def copy_layer(layer: Layer, name: str = "") -> Layer:
         copied_layer._redo_history = layer._redo_history
 
     return copied_layer
+
+
+# Used to copy layers into the orthogonal views unless an application defines its own.
+DEFAULT_COPY_LAYER = copy_layer
+
+
+def hook_name(hook: Callable) -> str:
+    """Name a hook after itself, for registrations that do not supply a name."""
+
+    return getattr(hook, "__qualname__", None) or repr(hook)
 
 
 def _sync_guard(*args: Any, **kwargs: Any) -> None:
@@ -165,6 +175,11 @@ def get_property_names(
             if isinstance(attr, Colormap | Selection):
                 continue
 
+            # Skip viewers: a layer may hold a reference to the viewer it belongs to
+            # (napari does not, but subclasses might), so skip this explicitly.
+            if isinstance(attr, ViewerModel):
+                continue
+
             # detect nested evented objects
             if (
                 hasattr(attr, "events")
@@ -182,18 +197,36 @@ class ViewerModelContainer:
     A container that holds a ViewerModel and manages synchronization.
     """
 
-    def __init__(self, title: str, order: tuple[int], sync_filters=None):
+    def __init__(
+        self,
+        title: str,
+        order: tuple[int],
+        sync_filters=None,
+        layer_hooks: dict[str, tuple[type, Callable | None]] | None = None,
+        copy_layer: Callable[[Layer, str], Layer] | None = None,
+    ):
         self.title = title
         self.viewer_model = ViewerModel(title)
         set_axes_visible(self.viewer_model, True)
         self._block = False
-        self._layer_hooks: dict[type, list[Callable]] = {}
         self.sync_filters = sync_filters or {}
+
+        # Register per-layer-type behaviour.
+        self._layer_hooks = (
+            dict(DEFAULT_LAYER_HOOKS) if layer_hooks is None else layer_hooks
+        )
+
+        # How a layer is copied into this viewer model.
+        self.copy_layer = copy_layer or DEFAULT_COPY_LAYER
 
         # Track every (signal, slot) connection made on the original layers and
         # their nested objects, keyed by id(orig_layer), so they can be
         # disconnected again when the layer is removed.
         self._layer_connections: dict[int, list[tuple[Any, Callable]]] = {}
+
+        # Non-connection cleanup for the same layers (e.g. restoring methods that
+        # were wrapped on the original layer), keyed by id(orig_layer) as well.
+        self._layer_teardowns: dict[int, list[Callable]] = {}
 
         # Add crosshair overlays (initially invisible)
         self.crosshair_overlay = CrosshairOverlay(
@@ -295,6 +328,10 @@ class ViewerModelContainer:
         """Sync properties between orig_layer and copied_layer, applying optional
         sync_filters. Automatically discovers and syncs nested object properties.
 
+        Nested properties are filtered as well: ``"*"`` blocks them along with
+        everything else, and they can be named individually as ``"<attr>.<property>"``
+        (e.g. ``"text.size"``).
+
         Args:
             orig_layer: Original layer to sync from
             copied_layer: Copied layer to sync to
@@ -328,10 +365,17 @@ class ViewerModelContainer:
                             if hasattr(orig_nested, prop_name) and hasattr(
                                 copied_nested, prop_name
                             ):
+                                nested_name = f"{nested_attr}.{prop_name}"
                                 self._setup_property_sync(
                                     orig_nested,
                                     copied_nested,
                                     prop_name,
+                                    not is_excluded(
+                                        orig_layer, nested_name, "forward"
+                                    ),
+                                    not is_excluded(
+                                        orig_layer, nested_name, "reverse"
+                                    ),
                                     bucket=bucket,
                                 )
             else:
@@ -352,20 +396,22 @@ class ViewerModelContainer:
                     bucket=bucket,
                 )
 
-    def _update_data(self, source: Labels, target: Labels) -> None:
-        """Copy data from source layer to target layer, which triggers a data event on
-        the target layer. Block syncing to itself (VM1 -> orig -> VM1 is blocked, but
-        VM1 -> orig -> VM2 is not blocked)
-        Args:
-            source: the source Labels layer
-            target: the target Labels layer"""
+    @contextlib.contextmanager
+    def blocked(self) -> Iterator[None]:
+        """Suppress this container's sync handlers for the duration of the block.
 
-        self._block = True  # no syncing to itself is necessary
-        target.data = (
-            source.data
-        )  # trigger data event so that it can sync to other viewer models (only if
-        # target layer is orig_layer)
-        self._block = False
+        Syncing writes to a layer, which makes that layer emit, which would sync
+        straight back. Handlers therefore check ``self._block`` and return early out if it
+        is set to True. The flag is per container, so blocking one orthogonal view does
+        not stop a change from reaching the other (VM1 -> orig -> VM1 is blocked, but
+        VM1 -> orig -> VM2 is not).
+        """
+
+        self._block = True
+        try:
+            yield
+        finally:
+            self._block = False
 
     def _sync_name(
         self, orig_layer: Layer, copied_layer: Layer, event: Event
@@ -393,51 +439,91 @@ class ViewerModelContainer:
         if self._block:
             return
 
-        self._block = True
-        setattr(
-            target_layer,
-            property_name,
-            getattr(source_layer, property_name),
-        )
-        self._block = False
+        with self.blocked():
+            if (
+                property_name == "data"
+                and target_layer.data is source_layer.data
+            ):
+                # The two layers hold the very same array, so an edit made in place is
+                # already in both. Assigning it again would only redo the layer's
+                # dims/extent bookkeeping, so refresh the target instead.
+                target_layer.refresh()
 
-    def _sync_selected_data(
-        self, source_layer: Points, target_layer: Points, _event: Event
+                if target_layer not in self.viewer_model.layers:
+                    # The target is the layer on the main viewer, the only one the
+                    # other orthogonal views listen to, so it has to emit the event.
+                    target_layer.events.data(value=target_layer.data)
+            else:
+                setattr(
+                    target_layer,
+                    property_name,
+                    getattr(source_layer, property_name),
+                )
+
+    def set_layer_hooks(
+        self, hooks: dict[str, tuple[type, Callable | None]] | None
     ) -> None:
-        """Special sync function to sync the full point selection between two Points
-        layers. ``points.selected_data`` is a Selection (an evented set). The whole set
-        has to be synced, rather than its single ``active`` element, because ``active``
-        is None as soon as more than one point is selected, which would drop
-        multi-selections.
+        """Replace the whole layer hook registry, ``{name: (layer_type, hook)}``.
 
-        Args:
-            source_layer (Points)
-            target_layer (Points)
+        The registry is stored by reference (not copied) so hooks registered, replaced
+        or disabled after the orthogonal views are shown still reach the layers added
+        afterwards. Passing None restores the built-in hooks.
         """
 
-        if self._block:
-            return
+        self._layer_hooks = (
+            dict(DEFAULT_LAYER_HOOKS) if hooks is None else hooks
+        )
 
-        self._block = True
-        target_layer.selected_data = set(source_layer.selected_data)
-        self._block = False
+    @staticmethod
+    def _register_hook_result(
+        result: Iterable[tuple[Any, Callable] | Callable] | None,
+        bucket: list[tuple[Any, Callable]],
+        teardowns: list[Callable],
+    ) -> None:
+        """Record whatever a layer hook did, so it can be undone again on cleanup.
 
-    def set_layer_hooks(self, hooks: dict[type, list[Callable]]) -> None:
-        """Replace current hook mapping to allow special handling of certain layer types."""
+        To allow cleanup of a hook after the layer is removed, the hook returns an
+        iterable containing:
+        - ``(signal, handler)`` pairs it connected, and/or
+        - zero-argument callables that undo anything else it changed.
 
-        self._layer_hooks = hooks
+        Returning None means the hook left nothing behind.
+
+        Args:
+            result: whatever the hook returned.
+            bucket (list): list collecting the (signal, slot) connections of this layer.
+            teardowns (list): list collecting the cleanup callables of this layer.
+
+        Raises:
+            TypeError: if the hook returned anything else. Signals are callable, so a
+                single ``(signal, handler)`` pair returned outside a list would
+                otherwise be taken apart and its signal emitted during cleanup.
+        """
+
+        for item in result or ():
+            if isinstance(item, tuple) and len(item) == 2:
+                bucket.append(item)
+            elif callable(item) and not hasattr(item, "connect"):
+                teardowns.append(item)
+            else:
+                raise TypeError(
+                    "a layer hook must return (signal, handler) pairs and/or "
+                    f"zero-argument callables, got {item!r}; a single pair has "
+                    "to be returned inside a list"
+                )
 
     def add_layer(self, orig_layer: Layer, index: int) -> None:
         """Set the layers of the contained ViewerModel."""
 
         self.viewer_model.layers.insert(
-            index, copy_layer(orig_layer, self.title)
+            index, self.copy_layer(orig_layer, self.title)
         )
         copied_layer = self.viewer_model.layers[orig_layer.name]
 
         # Collect every connection made for this layer so it can be cleaned up
         # again when the layer is removed (see remove_layer_connections).
         bucket = self._layer_connections.setdefault(id(orig_layer), [])
+        teardowns = self._layer_teardowns.setdefault(id(orig_layer), [])
 
         # sync name
         def sync_name_wrapper(event):
@@ -449,85 +535,35 @@ class ViewerModelContainer:
         # sync properties
         self._sync_layer_properties(orig_layer, copied_layer, bucket)
 
-        # Special relevant labels layer syncing
-        if isinstance(orig_layer, Labels):
+        # Special handling based on layer type, in registration order: the built-in
+        # behaviour first, then whatever the application registered.
+        for hook in self._hooks_for(orig_layer):
+            self._register_hook_result(
+                hook(orig_layer, copied_layer), bucket, teardowns
+            )
 
-            # Calling the Undo/Redo function on the labels layer should also refresh the
-            # other views.
-            def wrap_undo_redo(
-                source_layer: Labels, target_layer: Labels, update_fn: Callable
-            ):
-                """Wrap undo and redo methods to trigger syncing via update_fn"""
-                orig_undo = source_layer.undo
-                orig_redo = source_layer.redo
+    def _hooks_for(self, layer: Layer) -> Iterator[Callable]:
+        """Yield the hooks that apply to ``layer``, in registration order.
 
-                def wrapped_undo(self):
-                    orig_undo()
-                    update_fn(source=self, target=target_layer)
+        Disabled entries (hook set to None) are skipped, which is how a built-in
+        behaviour is switched off by an application that handles it itself.
+        """
 
-                def wrapped_redo(self):
-                    orig_redo()
-                    update_fn(source=self, target=target_layer)
+        for layer_type, hook in self._layer_hooks.values():
+            if hook is not None and isinstance(layer, layer_type):
+                yield hook
 
-                # Replace methods on the instance
-                source_layer.undo = MethodType(wrapped_undo, source_layer)
-                source_layer.redo = MethodType(wrapped_redo, source_layer)
+    def _cleanup_layer(self, key: int) -> None:
+        """Disconnect the tracked connections and run the teardowns stored under
+        ``key`` (an id(orig_layer))."""
 
-            # Wrap undo/redo
-            wrap_undo_redo(copied_layer, orig_layer, self._update_data)
-            wrap_undo_redo(orig_layer, copied_layer, self._update_data)
+        for signal, handler in self._layer_connections.pop(key, []):
+            with contextlib.suppress(ValueError, RuntimeError, TypeError):
+                signal.disconnect(handler)
 
-            # if the original layer is a labels layer, we want to connect to the paint
-            # event, because we need it in order to invoke syncing between the different
-            # viewers. (Paint event does not trigger 'data' event by itself).
-            # We do not need to connect to the eraser and fill bucket separately.
-            def copied_paint(_event):
-                # copy data from copied_layer to orig_layer (orig_layer emits signal,
-                # which triggers update on other viewer models, if present)
-                return self._update_data(
-                    source=copied_layer, target=orig_layer
-                )
-
-            def orig_paint(_event):
-                # copy data from orig_layer to copied_layer (copied_layer emits signal
-                # but we don't process it)
-                return self._update_data(
-                    source=orig_layer, target=copied_layer
-                )
-
-            copied_layer.events.paint.connect(copied_paint)
-            orig_layer.events.paint.connect(orig_paint)
-            bucket.append((copied_layer.events.paint, copied_paint))
-            bucket.append((orig_layer.events.paint, orig_paint))
-
-        # # Special relevant 'selected_data' syncing for points layers
-        if isinstance(orig_layer, Points):
-
-            def orig_selection(event):
-                return self._sync_selected_data(
-                    orig_layer, copied_layer, event
-                )
-
-            def copied_selection(event):
-                return self._sync_selected_data(
-                    copied_layer, orig_layer, event
-                )
-
-            orig_signal = orig_layer.selected_data.events.items_changed
-            copied_signal = copied_layer.selected_data.events.items_changed
-            orig_signal.connect(orig_selection)
-            copied_signal.connect(copied_selection)
-            bucket.append((orig_signal, orig_selection))
-            bucket.append((copied_signal, copied_selection))
-
-            # initial sync
-            self._sync_selected_data(orig_layer, copied_layer, None)
-
-        # Special hooks based on layer type
-        for hook_type, hooks in self._layer_hooks.items():
-            if isinstance(orig_layer, hook_type):
-                for hook in hooks:
-                    hook(orig_layer, copied_layer)
+        for teardown in self._layer_teardowns.pop(key, []):
+            with contextlib.suppress(ValueError, RuntimeError, TypeError):
+                teardown()
 
     def remove_layer_connections(self, orig_layer: Layer) -> None:
         """Disconnect and forget every sync connection made for ``orig_layer``.
@@ -537,17 +573,15 @@ class ViewerModelContainer:
         and keep mutating/referencing it.
         """
 
-        for signal, handler in self._layer_connections.pop(id(orig_layer), []):
-            with contextlib.suppress(ValueError, RuntimeError, TypeError):
-                signal.disconnect(handler)
+        self._cleanup_layer(id(orig_layer))
 
     def disconnect_all(self) -> None:
         """Disconnect every tracked sync connection across all layers."""
 
-        for key in list(self._layer_connections):
-            for signal, handler in self._layer_connections.pop(key, []):
-                with contextlib.suppress(ValueError, RuntimeError, TypeError):
-                    signal.disconnect(handler)
+        for key in dict.fromkeys(
+            (*self._layer_connections, *self._layer_teardowns)
+        ):
+            self._cleanup_layer(key)
 
 
 class OrthoViewWidget(QWidget):
@@ -560,13 +594,18 @@ class OrthoViewWidget(QWidget):
         order=(-2, -3, -1),
         sync_axes: list[int] | None = None,
         sync_filters: dict | None = None,
-        layer_hooks: dict | None = None,
+        layer_hooks: dict[str, tuple[type, Callable | None]] | None = None,
+        copy_layer: Callable[[Layer, str], Layer] | None = None,
     ):
         super().__init__()
         self.viewer = viewer
         set_axes_visible(self.viewer, True)
-        get_axes(self.viewer).events.visible.connect(
-            self._set_orth_views_dims_order
+
+        # Connections on the main viewer, tracked so cleanup() releases them again
+        self._connections: list[tuple[EventEmitter, Callable]] = []
+        self._connect(
+            get_axes(self.viewer).events.visible,
+            self._set_orth_views_dims_order,
         )
         self.order = order
         if sync_axes is None:
@@ -575,15 +614,14 @@ class OrthoViewWidget(QWidget):
         self._grid_syncing = False
         self._block_center = False
         self._block_step = False
-        self._layer_hooks = layer_hooks
-
         # create container to store viewer model in
         self.vm_container = ViewerModelContainer(
-            title="orthogonal view", order=order, sync_filters=sync_filters
+            title="orthogonal view",
+            order=order,
+            sync_filters=sync_filters,
+            layer_hooks=layer_hooks,
+            copy_layer=copy_layer,
         )
-
-        # Add optional layer hooks
-        self.vm_container.set_layer_hooks(self._layer_hooks)
 
         # Create QtViewer instance with viewer model
         self.qt_viewer = QtViewer(self.vm_container.viewer_model)
@@ -608,8 +646,7 @@ class OrthoViewWidget(QWidget):
                 self.vm_container.viewer_model.layers[layer_index]
             )
 
-        # Connect to events
-        self._connections = []
+        ## Connect to events
 
         # Layer events
         self._connect(self.viewer.layers.events.inserted, self._layer_added)
@@ -632,6 +669,14 @@ class OrthoViewWidget(QWidget):
 
         # Adjust dimension order for orthogonal views
         self._set_orth_views_dims_order()
+
+        # Position dims to where the main viewer is looking without emitting event
+        self._block_center = True
+        self.vm_container.viewer_model.dims.point = self.viewer.dims.point
+        self._block_center = False
+
+        # reset the view to frame the data in the orthogonal view as well
+        self.vm_container.viewer_model.reset_view()
 
     def _connect(self, emitter: EventEmitter, handler: Callable) -> None:
         """Connect an event emitter to a function handler and add it to the list of

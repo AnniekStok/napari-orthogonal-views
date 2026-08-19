@@ -1,7 +1,8 @@
 import contextlib
 import warnings
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
 
 import cv2
 import numpy as np
@@ -27,8 +28,11 @@ from napari_orthogonal_views.cross_hair_overlay import (
     CrosshairOverlay,
     VispyCrosshairOverlay,
 )
+from napari_orthogonal_views.layer_sync_hooks import DEFAULT_LAYER_HOOKS
 from napari_orthogonal_views.ortho_view_widget import (
+    DEFAULT_COPY_LAYER,
     OrthoViewWidget,
+    hook_name,
 )
 from napari_orthogonal_views.screen_recorder_widget import ScreenRecorderWidget
 from napari_orthogonal_views.viewer_utils import (
@@ -105,8 +109,13 @@ class OrthoViewManager:
             warnings.simplefilter("ignore")
             activate_on_hover(self.viewer.window.qt_viewer)
 
-        # initialize layer hooks
-        self._layer_hooks: dict[type, list[Callable]] = {}
+        # Define layer hook registry.
+        self._layer_hooks: dict[str, tuple[type, Callable | None]] = dict(
+            DEFAULT_LAYER_HOOKS
+        )
+
+        # How layers are copied into the orthogonal views (see set_copy_layer)
+        self._copy_layer: Callable[[Layer, str], Layer] = DEFAULT_COPY_LAYER
 
         # get layout of central widget
         central = self.main_window.centralWidget()
@@ -289,10 +298,73 @@ class OrthoViewManager:
 
         self.main_controls_widget.controls_widget.grid_widget.setChecked(state)
 
-    def register_layer_hook(self, layer_type: type, hook: Callable) -> None:
-        """Register a hook to be applied to any matching layer type."""
+    @property
+    def layer_hooks(self) -> Mapping[str, tuple[type, Callable | None]]:
+        """The layer hooks in use, ``{name: (layer_type, hook)}``, in call order. They
+        include the built-in hooks (DEFAULT_LAYER_HOOKS) and any custom hooks registered
+        by other applications.
 
-        self._layer_hooks.setdefault(layer_type, []).append(hook)
+        layer_hooks can be modified via :meth:`register_layer_hook` and
+        :meth:`set_layer_hook`.
+
+        Returns:
+            Mapping[str, tuple[type, Callable | None]]: the layer hooks in use.
+        """
+
+        return MappingProxyType(self._layer_hooks)
+
+    def register_layer_hook(
+        self, layer_type: type, hook: Callable, name: str | None = None
+    ) -> None:
+        """Register a hook to be applied to any matching layer type.
+
+        Args:
+            layer_type (type): layer class (or tuple of classes) the hook applies to.
+            hook (Callable): the hook itself.
+            name (str | None): name to register it under, so it can be replaced or
+                disabled later.
+        """
+
+        self._layer_hooks[name or hook_name(hook)] = (layer_type, hook)
+
+    def set_layer_hook(self, name: str, hook: Callable | None) -> None:
+        """Replace, or disable, an already registered layer hook.
+
+        This is how an application can switch off a built-in behaviour it handles itself,
+        for instance ``set_layer_hook("labels_paint", None)`` when its own hook already
+        forwards paint events. The layer type of the registration is kept.
+
+        Args:
+            name (str): name the hook is registered under, e.g. ``"labels_paint"``.
+            hook (Callable | None): replacement hook, or None to disable it.
+
+        Raises:
+            KeyError: if no hook is registered under ``name``.
+        """
+
+        if name not in self._layer_hooks:
+            raise KeyError(
+                f"no layer hook named {name!r}; registered hooks are "
+                f"{sorted(self._layer_hooks)}"
+            )
+
+        layer_type, _ = self._layer_hooks[name]
+        self._layer_hooks[name] = (layer_type, hook)
+
+    def set_copy_layer(
+        self, copy_layer: Callable[[Layer, str], Layer]
+    ) -> None:
+        """Set the function that copies a layer into the orthogonal views.
+
+        Called as ``copy_layer(orig_layer, viewer_name)`` and expected to return the
+        layer to show in the orthogonal view. Use this for e.g. special behavior of layer
+        subclasses.
+
+        Args:
+            copy_layer (Callable): the replacement copy function.
+        """
+
+        self._copy_layer = copy_layer
 
     def set_sync_filters(
         self, sync_filters: dict[type[Layer], dict[str, set[str] | str]]
@@ -339,6 +411,7 @@ class OrthoViewManager:
             sync_axes=[1],
             sync_filters=self.sync_filters,
             layer_hooks=self._layer_hooks,
+            copy_layer=self._copy_layer,
         )
 
         old_right = self.right_widget
@@ -354,6 +427,7 @@ class OrthoViewManager:
             sync_axes=[2],
             sync_filters=self.sync_filters,
             layer_hooks=self._layer_hooks,
+            copy_layer=self._copy_layer,
         )
         old_bottom = self.bottom_widget
         idx = self.h_splitter_bottom.indexOf(old_bottom)
@@ -396,11 +470,23 @@ class OrthoViewManager:
 
         self._shown = True
 
+        # put the crosshairs somewhere the orthogonal views actually show something
+        self.center_crosshairs()
+
         # activate specific checkboxes by default (grid is excluded)
         if self.activate_checkboxes:
             self.set_cross_hairs(True)
             self.set_zoom_sync(True)
             self.set_center_sync(True)
+
+    def center_crosshairs(self) -> None:
+        """Move the crosshairs to the middle of the data along the displayed axes."""
+
+        dims = self.viewer.dims
+        step = list(dims.current_step)
+        for axis in dims.displayed:
+            step[axis] = int((dims.nsteps[axis] - 1) / 2)
+        dims.current_step = step
 
     def hide(self) -> None:
         """Remove the OrthoViewWidgets and replace with empty QWidget placeholders. Make
@@ -411,6 +497,10 @@ class OrthoViewManager:
         self.main_controls_widget.show_checkbox.setChecked(False)
         self.main_controls_widget.show_checkbox.blockSignals(False)
 
+        if not self._shown:
+            return
+
+        # only disconnect what show() connected
         self.viewer.dims.events.order.disconnect(self.update_dims_order)
         self.viewer.dims.events.ndim.disconnect(
             self.update_screen_recorder_axes
@@ -418,9 +508,6 @@ class OrthoViewManager:
         self.viewer.dims.events.range.disconnect(
             self.screen_recorder_widget.update_slice_range
         )
-
-        if not self._shown:
-            return
 
         if isinstance(self.right_widget, OrthoViewWidget):
             self.right_widget.cleanup()

@@ -1,12 +1,20 @@
+import collections
+
 import numpy as np
+import pytest
 from napari.layers import Image, Labels, Points
 
+from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
+from napari_orthogonal_views.layer_sync_hooks import (
+    DEFAULT_LAYER_HOOKS,
+)
 from napari_orthogonal_views.ortho_view_manager import (
     _get_manager,
     show_orthogonal_views,
 )
 from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
+    ViewerModelContainer,
     get_property_names,
 )
 
@@ -362,6 +370,81 @@ def test_colormap_sync(make_napari_viewer, qtbot):
     m.cleanup()
 
 
+def test_sync_filters_apply_to_nested_properties(make_napari_viewer, qtbot):
+    """sync_filters must cover nested properties, not just the layer's own ones.
+
+    A layer that is filtered out entirely ("*") should end up with no property
+    connections at all, including nested overlays (bounding box, name overlay)
+    Individual nested properties can be named as "<attr>.<property>".
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    m.set_sync_filters(
+        {
+            Image: {"forward_exclude": "*", "reverse_exclude": "*"},
+            Points: {"forward_exclude": {"text.size"}},
+        }
+    )
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    img = Image(np.zeros((5, 20, 20)))
+    img.name = "img"
+    viewer.add_layer(img)
+    points = Points(
+        [[1, 1, 1], [2, 2, 2]], name="points", text={"string": "x"}
+    )
+    viewer.add_layer(points)
+
+    container = m.right_widget.vm_container
+    copied_img = container.viewer_model.layers["img"]
+    copied_points = container.viewer_model.layers["points"]
+
+    # nothing at all is synced for the fully excluded layer, nested included
+    img.opacity = 0.25
+    img.bounding_box.visible = True
+    assert copied_img.opacity != 0.25
+    assert copied_img.bounding_box.visible is False
+
+    # the individually named nested property is not synced ...
+    points.text.size = 23
+    assert copied_points.text.size != 23
+
+    # ... while its siblings still are
+    points.text.visible = False
+    assert copied_points.text.visible is False
+    points.bounding_box.visible = True
+    assert copied_points.bounding_box.visible is True
+
+    m.cleanup()
+
+
+def test_layer_reference_to_viewer_is_not_synced(make_napari_viewer, qtbot):
+    """A viewer held by a layer must not be discovered as a nested evented object.
+
+    Layer subclasses sometimes keep a reference to the viewer they live in. That is a
+    whole viewer's state (theme, status, title, ...), not a layer property, and syncing
+    it would wire the ortho viewer models to the main viewer.
+    """
+
+    viewer = make_napari_viewer()
+
+    class LayerWithViewer(Image):
+        pass
+
+    layer = LayerWithViewer(np.zeros((5, 20, 20)))
+    layer.viewer = viewer
+
+    nested = [
+        list(item.keys())[0]
+        for item in get_property_names(layer)
+        if isinstance(item, dict)
+    ]
+    assert "viewer" not in nested
+    assert "bounding_box" in nested  # ... other nested models are still found
+
+
 def test_sync_connections_cleaned_up(make_napari_viewer, qtbot):
     """Removing a layer must disconnect the sync connections made on the original
     layer, so they do not outlive the removed copied layer and keep mutating it.
@@ -397,6 +480,59 @@ def test_sync_connections_cleaned_up(make_napari_viewer, qtbot):
 
     assert copied.opacity == 1.0
     assert copied.bounding_box.visible is False
+
+    m.cleanup()
+
+
+def test_layer_hook_connections_cleaned_up(make_napari_viewer, qtbot):
+    """Connections a layer hook makes on the *original* layer must be released again.
+
+    A hook closes over the copied layer, so a connection that survives hiding the
+    orthogonal views keeps a discarded copy alive and updated: the work (and the
+    memory) then grows with every hide/show cycle.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+
+    labels = Labels(np.zeros((5, 20, 20), dtype=np.uint8))
+    labels.name = "labels"
+    viewer.add_layer(labels)
+
+    notified = []
+
+    def hook(orig_layer, copied_layer):
+        """Hook reporting its connections, so they can be cleaned up again."""
+
+        def on_opacity(event):
+            notified.append(copied_layer)
+
+        orig_layer.events.opacity.connect(on_opacity)
+        return [(orig_layer.events.opacity, on_opacity)]
+
+    m.register_layer_hook(Labels, hook)
+
+    def bump_opacity():
+        notified.clear()
+        labels.opacity = 0.5 if labels.opacity != 0.5 else 0.6
+        return len(notified)
+
+    assert "undo" not in labels.__dict__
+    assert bump_opacity() == 0  # no views yet
+
+    for _ in range(3):
+        show_orthogonal_views(viewer)
+        qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+        # exactly one live hook connection per orthogonal view, never more
+        assert bump_opacity() == 2
+        assert "undo" in labels.__dict__  # undo/redo wrapped for syncing
+
+        m.hide()
+
+        # ... and nothing left behind afterwards, however often this is repeated
+        assert bump_opacity() == 0
+        assert "undo" not in labels.__dict__
 
     m.cleanup()
 
@@ -451,7 +587,8 @@ def test_labels_undo_redo_sync(make_napari_viewer, qtbot):
     both ortho views.
 
     Undo/redo do not emit a paint/data event, so the plugin wraps the layers'
-    ``undo``/``redo`` methods to explicitly re-sync via ``_update_data``. This test
+    ``undo``/``redo`` methods so that they emit the ``data`` event napari does not
+    emit for them, which the generic data syncing then carries. This test
     exercises that path in both directions (main -> ortho and ortho -> main).
     """
 
@@ -500,6 +637,86 @@ def test_labels_undo_redo_sync(make_napari_viewer, qtbot):
     assert counts() == (3, 3, 3)
 
     m.cleanup()
+
+
+def test_paint_makes_every_other_view_redraw(make_napari_viewer, qtbot):
+    """Painting in one view must make all the other views redraw.
+
+    The copied layers hold the very same array as the original, so comparing their data
+    cannot tell whether the others were notified -- an edit is visible in all of them
+    either way. Count their redraws instead. This matters because the data syncing skips
+    re-assigning an array a layer already holds, and has to emit the data event itself
+    for the remaining views to hear about the edit.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    labels = Labels(np.zeros((20, 20, 20), dtype=np.uint8))
+    viewer.add_layer(labels)
+
+    right = m.right_widget.vm_container.viewer_model.layers[0]
+    bottom = m.bottom_widget.vm_container.viewer_model.layers[0]
+    assert right.data is labels.data
+    assert bottom.data is labels.data
+
+    redraws = collections.Counter()
+    for name, layer in (
+        ("main", labels),
+        ("right", right),
+        ("bottom", bottom),
+    ):
+        layer.events.set_data.connect(
+            lambda event, name=name: redraws.update([name])
+        )
+
+    # painting in the main viewer reaches both ortho views
+    labels.data_setitem((np.array([5]), np.array([5]), np.array([5])), 5)
+    assert redraws["right"] > 0
+    assert redraws["bottom"] > 0
+
+    # painting in one ortho view reaches the main viewer and the *other* ortho view
+    redraws.clear()
+    right.data_setitem((np.array([6]), np.array([6]), np.array([6])), 5)
+    assert redraws["main"] > 0
+    assert redraws["bottom"] > 0
+
+    m.cleanup()
+
+
+def test_paint_announces_the_data_event_once(make_napari_viewer, qtbot):
+    """Painting emits ``data`` on the layer that was painted, exactly once.
+
+    Painting emits ``paint`` and not ``data``, so the layers are patched to emit it.
+    That patch is shared by the orthogonal views rather than installed per view, so an
+    application listening on ``data`` hears about an edit once, not once per view.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    labels = Labels(np.zeros((20, 20, 20), dtype=np.uint8))
+    viewer.add_layer(labels)
+
+    announced = []
+    labels.events.data.connect(lambda event: announced.append(event))
+
+    labels.data_setitem((np.array([5]), np.array([5]), np.array([5])), 5)
+    assert len(announced) == 1
+
+    labels.undo()
+    assert len(announced) == 2
+
+    m.cleanup()
+
+    # the patches are gone again, so the layer stops announcing edits
+    announced.clear()
+    labels.data_setitem((np.array([7]), np.array([7]), np.array([7])), 5)
+    assert announced == []
 
 
 def test_layer_hook(make_napari_viewer, qtbot):
@@ -597,6 +814,232 @@ def test_layer_hook(make_napari_viewer, qtbot):
 
     # Now the original layer's selected_label should be 5
     assert viewer.layers[0].selected_label == 5
+
+    m.cleanup()
+
+
+def crosshair_position(qt_viewer):
+    """Return the world position the crosshair visual is currently drawn at."""
+
+    for overlay, visual in qt_viewer.canvas._overlay_to_visual.items():
+        if isinstance(overlay, CrosshairOverlay):
+            visual = visual[0] if isinstance(visual, list) else visual
+            return np.asarray(visual.node._pos)[0]
+    raise AssertionError("no crosshair overlay on this canvas")
+
+
+def test_ortho_views_open_where_the_main_viewer_is_looking(
+    make_napari_viewer, qtbot
+):
+    """Showing the orthogonal views must position them, and the crosshairs, sensibly.
+
+    The copied layers are inserted into the viewer models directly, which skips the
+    positioning napari does when a first layer is added, and the crosshair visual starts
+    at the world origin until a step event moves it. Together that opened the orthogonal
+    views on an arbitrary (usually empty) slice with the crosshairs in a corner.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+
+    labels = Labels(np.zeros((5, 30, 40, 50), dtype=np.uint8))
+    viewer.add_layer(labels)
+
+    # navigate the sliders somewhere specific first
+    viewer.dims.current_step = (3, 7, 0, 0)
+    before = list(viewer.dims.current_step)
+
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    # the displayed axes are centred on the data ...
+    dims = viewer.dims
+    for axis in dims.displayed:
+        assert dims.current_step[axis] == int((dims.nsteps[axis] - 1) / 2)
+
+    # ... while the sliders stay where the user left them
+    for axis in dims.not_displayed:
+        assert dims.current_step[axis] == before[axis]
+
+    # both orthogonal views look at the same position as the main viewer
+    for widget in (m.right_widget, m.bottom_widget):
+        assert widget.vm_container.viewer_model.dims.point == dims.point
+
+    # and every crosshair is drawn there, not at the world origin
+    m.set_cross_hairs(True)
+    for qt_viewer in (
+        viewer.window._qt_viewer,
+        m.right_widget.qt_viewer,
+        m.bottom_widget.qt_viewer,
+    ):
+        assert not np.allclose(crosshair_position(qt_viewer)[:2], 0)
+
+    m.cleanup()
+
+
+def test_register_layer_hook_is_idempotent(make_napari_viewer, qtbot):
+    """Registering the same hook twice must not run it twice per layer.
+
+    The manager is cached per viewer, so an application's setup routine can easily run
+    again for the same viewer.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+
+    calls = []
+
+    def hook(orig_layer, copied_layer):
+        calls.append(copied_layer)
+
+    m.register_layer_hook(Labels, hook)
+    m.register_layer_hook(Labels, hook)
+    assert [entry for entry in m.layer_hooks.values() if entry[1] is hook] == [
+        (Labels, hook)
+    ]
+
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+    viewer.add_layer(Labels(np.zeros((5, 20, 20), dtype=np.uint8)))
+
+    assert len(calls) == 2  # once per orthogonal view, not twice
+
+    m.cleanup()
+
+
+def test_hook_result_registration():
+    """What a hook returns has to be either a connection or a teardown.
+
+    Returning a bare ``(signal, handler)`` pair rather than a list of them is the easy
+    mistake, and the one worth catching: signals are callable, so the pair would be
+    taken apart and the signal itself filed as a teardown, to be emitted on cleanup.
+    """
+
+    labels = Labels(np.zeros((5, 5, 5), dtype=np.uint8))
+    signal = labels.events.opacity
+
+    def handler(event): ...
+
+    def teardown(): ...
+
+    connections, teardowns = [], []
+    register = ViewerModelContainer._register_hook_result
+
+    register(None, connections, teardowns)  # a hook that left nothing behind
+    assert (connections, teardowns) == ([], [])
+
+    register([(signal, handler), teardown], connections, teardowns)
+    assert connections == [(signal, handler)]
+    assert teardowns == [teardown]
+
+    with pytest.raises(TypeError, match="a single pair has to be returned"):
+        register((signal, handler), connections, teardowns)  # missing the list
+
+    with pytest.raises(TypeError, match="zero-argument callables"):
+        register(["not a connection"], connections, teardowns)
+
+
+def test_default_hooks_are_installed_without_registering_anything(
+    make_napari_viewer, qtbot
+):
+    """The built-in behaviour must not depend on an application registering hooks."""
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    assert dict(m.layer_hooks) == DEFAULT_LAYER_HOOKS
+    for widget in (m.right_widget, m.bottom_widget):
+        container = widget.vm_container
+        labels = Labels(np.zeros((5, 20, 20), dtype=np.uint8))
+        assert [h.__name__ for h in container._hooks_for(labels)] == [
+            "sync_labels_undo_redo",
+            "sync_labels_paint",
+        ]
+        points = Points(np.zeros((1, 3)))
+        assert [h.__name__ for h in container._hooks_for(points)] == [
+            "sync_points_selection"
+        ]
+
+    m.cleanup()
+
+
+def test_built_in_hook_can_be_replaced_or_switched_off(
+    make_napari_viewer, qtbot
+):
+    """An application that handles a behaviour itself must be able to take the built-in
+    one out, by name, without touching the rest."""
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+
+    calls = []
+
+    def replacement(orig_layer, copied_layer):
+        calls.append(copied_layer)
+
+    m.set_layer_hook("labels_paint", replacement)
+    m.set_layer_hook("points_selection", None)
+
+    with pytest.raises(KeyError, match="no layer hook named"):
+        m.set_layer_hook("not_a_hook", replacement)
+
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    viewer.add_layer(Labels(np.zeros((5, 20, 20), dtype=np.uint8)))
+    viewer.add_layer(Points(np.zeros((1, 3))))
+
+    assert len(calls) == 2  # the replacement ran, once per orthogonal view
+
+    for widget in (m.right_widget, m.bottom_widget):
+        container = widget.vm_container
+        names = [h.__name__ for h in container._hooks_for(viewer.layers[0])]
+        assert names == ["sync_labels_undo_redo", "replacement"]
+        # the disabled one is gone, and it took its syncing with it
+        assert list(container._hooks_for(viewer.layers[1])) == []
+
+    viewer.layers[1].selected_data = {0}
+    for widget in (m.right_widget, m.bottom_widget):
+        copied_points = widget.vm_container.viewer_model.layers[1]
+        assert set(copied_points.selected_data) == set()
+
+    m.cleanup()
+
+
+def test_copy_layer_can_be_replaced(make_napari_viewer, qtbot):
+    """Applications must be able to decide how their layers are copied into the views.
+
+    A layer subclass may need something else entirely on the orthogonal views, so the
+    copy function is an injection point rather than something to monkeypatch.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+
+    class AppLabels(Labels):
+        """Stand-in for the layer type an application shows in the ortho views."""
+
+    def copy_via_app(layer, name=""):
+        copied = AppLabels(layer.data, name=layer.name)
+        copied.metadata["viewer_name"] = name
+        return copied
+
+    m.set_copy_layer(copy_via_app)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    viewer.add_layer(Labels(np.zeros((5, 20, 20), dtype=np.uint8), name="lbl"))
+
+    for widget in (m.right_widget, m.bottom_widget):
+        copied = widget.vm_container.viewer_model.layers["lbl"]
+        assert isinstance(copied, AppLabels)
+
+    # and the layer is still synced like any other
+    viewer.layers["lbl"].opacity = 0.25
+    for widget in (m.right_widget, m.bottom_widget):
+        assert widget.vm_container.viewer_model.layers["lbl"].opacity == 0.25
 
     m.cleanup()
 
