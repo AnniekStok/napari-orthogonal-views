@@ -211,9 +211,7 @@ class ViewerModelContainer:
         self._block = False
         self.sync_filters = sync_filters or {}
 
-        # Every per-layer-type behaviour, built-in and application, in one registry.
-        # Kept by reference when supplied, so registering or disabling a hook after the
-        # views are shown still reaches the layers added afterwards.
+        # Register per-layer-type behaviour.
         self._layer_hooks = (
             dict(DEFAULT_LAYER_HOOKS) if layer_hooks is None else layer_hooks
         )
@@ -403,9 +401,9 @@ class ViewerModelContainer:
         """Suppress this container's sync handlers for the duration of the block.
 
         Syncing writes to a layer, which makes that layer emit, which would sync
-        straight back. Handlers therefore check ``self._block`` and bail out while it
-        is set. The flag is per container, so blocking one orthogonal view does not
-        stop a change from reaching the other (VM1 -> orig -> VM1 is blocked, but
+        straight back. Handlers therefore check ``self._block`` and return early out if it
+        is set to True. The flag is per container, so blocking one orthogonal view does
+        not stop a change from reaching the other (VM1 -> orig -> VM1 is blocked, but
         VM1 -> orig -> VM2 is not).
         """
 
@@ -446,9 +444,9 @@ class ViewerModelContainer:
                 property_name == "data"
                 and target_layer.data is source_layer.data
             ):
-                # The two layers hold the very same array (see copy_layer), so an edit
-                # made in place is already in both. Assigning it again would only redo
-                # the layer's dims/extent bookkeeping, so refresh the target instead.
+                # The two layers hold the very same array, so an edit made in place is
+                # already in both. Assigning it again would only redo the layer's
+                # dims/extent bookkeeping, so refresh the target instead.
                 target_layer.refresh()
 
                 if target_layer not in self.viewer_model.layers:
@@ -648,7 +646,7 @@ class OrthoViewWidget(QWidget):
                 self.vm_container.viewer_model.layers[layer_index]
             )
 
-        # Connect to events
+        ## Connect to events
 
         # Layer events
         self._connect(self.viewer.layers.events.inserted, self._layer_added)

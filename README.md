@@ -66,7 +66,7 @@ By default, all events (including label editing such as painting) are synced acr
 ## Syncing properties
 By default, all layer properties should be synced between the layer on the main viewer and the orthoviews. However, it is possible to have more finegrained control over the synced properties via the `set_sync_filters` function, as long as it is specified *before* the orthogonal views are activated.
 
-For example, to disable syncing of all properties on Tracks layers and specifically the contour property on Labels layers:
+For example, to disable syncing of all properties on Tracks layers and specifically the `contour` property on Labels layers:
 
 ```
 from napari_orthogonal_views.ortho_view_manager import _get_manager
@@ -87,19 +87,22 @@ m.set_sync_filters(sync_filters)
 Then add 3D data (e.g. File > Open Sample > napari builtins > Balls (3D)). Activate the labels layer and change the contour value. You should see that the contour property is not synced from main viewer to orthoviews now.
 
 ## Layer hooks
-Some syncing cannot be expressed as a property copy: painting on a Labels layer, undo/redo, and the point selection each need their own wiring. These are implemented as *layer hooks* in `layer_sync_hooks.py`, and are installed automatically.
+Some syncing cannot be expressed as a property copy: painting on a Labels layer, undo/redo, and the point selection each need their own wiring, because they do not emit an event that the property syncing can pick up. These are implemented as *layer hooks* in `layer_sync_hooks.py`, and are installed automatically.
 
 A hook is called once per layer, per orthogonal view:
 
 ```python
 def my_hook(orig_layer, copied_layer):
-    ...
+    # do something to the layers, e.g. connect a signal to a handler
+    orig_layer.events.some_signal.connect(my_handler)
+    # return a cleanup callable that disconnects the signal again
+    return [lambda: orig_layer.events.some_signal.disconnect(my_handler)]
 ```
 
 Layers can be removed while the orthogonal views stay open, so a hook has to report what it did. It returns an iterable mixing `(signal, handler)` pairs it connected and zero-argument callables that undo anything else; returning `None` means it left nothing behind.
 
 ### Adding behavior
-`register_layer_hook` attaches an extra hook to a layer type, and runs after the built-in ones:
+`register_layer_hook` attaches an extra hook to a layer type. This can be useful if you want the main viewer to respond in a certain way to events of specific layer (sub)classes occuring on the ortho views. For example:
 
 ```python
 from napari_orthogonal_views.ortho_view_manager import _get_manager
@@ -121,6 +124,7 @@ def report_clicks(orig_layer, copied_layer):
 
 m.register_layer_hook(Labels, report_clicks)
 ```
+allows the original layer in the main viewer to respond to click events in the ortho views. The property 'selected_label' will then automatically sync to the ortho views as well.
 
 ### Overriding the built-in behavior
 The built-in hooks are keyed by name (`labels_undo_redo`, `labels_paint`, `points_selection`) so a single one can be replaced without disturbing the others. Use this to keep the default behavior and add to it:
@@ -141,6 +145,9 @@ m.set_layer_hook("labels_paint", paint_and_recount)
 ```
 
 Passing `None` disables a built-in entirely. `set_layer_hook` and `register_layer_hook` may be called after the orthogonal views are shown; the change then applies to layers added from that point on.
+
+## Changing the ortho view layer counterparts
+By default, the plugin will create shallow copies of each layer when activating the orthogonal views. These copies are of the same layer type but share the underlying data arrays with the original, to avoid duplication of the data. `OrthoViewManager.set_copy_layer` allows to change the copy layer function to a custom function: for example, instead of creating a copy of the same layer type, you can specify that the ortho views should make a copy of a specific layer subclass that has slightly different behavior, or that certain layer types should not be copied but produce an empty dummy layer in the ortho views instead.
 
 ## Screen recording
 The 'Screen recording' tab offers a quick way to save a stitched image of the viewer with its orthogonal views. It is also possible to slide along a given axis and record a movie that is saved as a .avi file.

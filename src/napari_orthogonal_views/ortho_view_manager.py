@@ -109,10 +109,7 @@ class OrthoViewManager:
             warnings.simplefilter("ignore")
             activate_on_hover(self.viewer.window.qt_viewer)
 
-        # Layer hooks, built-in and custom, in one registry keyed by name. The
-        # built-ins are registered here like any other hook, so an application can
-        # replace or switch off a single one (see set_layer_hook) without having to
-        # reimplement the rest.
+        # Define layer hook registry.
         self._layer_hooks: dict[str, tuple[type, Callable | None]] = dict(
             DEFAULT_LAYER_HOOKS
         )
@@ -302,11 +299,15 @@ class OrthoViewManager:
 
     @property
     def layer_hooks(self) -> Mapping[str, tuple[type, Callable | None]]:
-        """The layer hooks in use, ``{name: (layer_type, hook)}``, in call order.
+        """The layer hooks in use, ``{name: (layer_type, hook)}``, in call order. They
+        include the built-in hooks (DEFAULT_LAYER_HOOKS) and any custom hooks registered
+        by other applications.
 
-        Read-only: use :meth:`register_layer_hook` and :meth:`set_layer_hook` to change
-        it. The built-in hooks are in here too, under the names in
-        :data:`~napari_orthogonal_views.layer_sync_hooks.DEFAULT_LAYER_HOOKS`.
+        layer_hooks can be modified via :meth:`register_layer_hook` and
+        :meth:`set_layer_hook`.
+
+        Returns:
+            Mapping[str, tuple[type, Callable | None]]: the layer hooks in use.
         """
 
         return MappingProxyType(self._layer_hooks)
@@ -316,15 +317,11 @@ class OrthoViewManager:
     ) -> None:
         """Register a hook to be applied to any matching layer type.
 
-        The hook is called as ``hook(orig_layer, copied_layer)`` once per layer, per
-        orthogonal view, in registration order.
-
         Args:
             layer_type (type): layer class (or tuple of classes) the hook applies to.
             hook (Callable): the hook itself.
             name (str | None): name to register it under, so it can be replaced or
-                disabled later. Defaults to the hook's qualified name, which also means
-                registering the same hook twice is a no-op rather than a duplicate.
+                disabled later.
         """
 
         self._layer_hooks[name or hook_name(hook)] = (layer_type, hook)
@@ -332,7 +329,7 @@ class OrthoViewManager:
     def set_layer_hook(self, name: str, hook: Callable | None) -> None:
         """Replace, or disable, an already registered layer hook.
 
-        This is how an application switches off a built-in behaviour it handles itself,
+        This is how an application can switch off a built-in behaviour it handles itself,
         for instance ``set_layer_hook("labels_paint", None)`` when its own hook already
         forwards paint events. The layer type of the registration is kept.
 
@@ -479,13 +476,7 @@ class OrthoViewManager:
             self.set_center_sync(True)
 
     def center_crosshairs(self) -> None:
-        """Move the crosshairs to the middle of the data along the displayed axes.
-
-        Only the displayed axes are moved, so the sliders (usually time, and z while the
-        main viewer shows xy) stay where the user left them. Along the displayed axes the
-        position is otherwise wherever napari left it, which tends to be a corner of the
-        data - and a corner is exactly where the orthogonal views have nothing to show.
-        """
+        """Move the crosshairs to the middle of the data along the displayed axes."""
 
         dims = self.viewer.dims
         step = list(dims.current_step)

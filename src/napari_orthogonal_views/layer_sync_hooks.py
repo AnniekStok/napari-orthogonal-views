@@ -1,11 +1,29 @@
 """Built-in, per-layer-type syncing behaviour, expressed as layer hooks.
 
 These functions are the default behaviour of the orthogonal views, and are applied to
-every layer that matches their type. They are registered like any other hook, under the
-names in ``DEFAULT_LAYER_HOOKS``, so an application can add its own alongside them
-(``manager.register_layer_hook(layer_type, hook)``), replace one
-(``manager.set_layer_hook("labels_paint", my_hook)``), or switch one off when it handles
-that behaviour itself (``manager.set_layer_hook("labels_paint", None)``).
+every layer that matches their type. They are registered under the names in
+``DEFAULT_LAYER_HOOKS``. Specifically, they ensure that undo/redo and painting on Labels
+layers, and selection on Points layers, are mirrored to the other views. This would
+otherwise fail, because these operations do not emit events that the standard property
+syncing can pick up.
+
+Custom hooks, that change the behavior of an ortho view for a particular layer type, can
+be added via manager.register_layer_hook(layer_type, hook).
+
+Default hooks can be replaced with a custom one via
+manager.set_layer_hook("labels_paint", my_hook), or switched off entirely via
+manager.set_layer_hook("labels_paint", None).
+
+A hook is defined as a callable that takes two arguments, the original layer and its
+copy in the orthogonal view, and returns an iterable of cleanup callables.
+The callable defines the behaviour that should be applied to the layer.
+
+Example:
+def my_hook(orig_layer, copied_layer):
+    # do something to the layers, e.g. connect a signal to a handler
+    orig_layer.events.some_signal.connect(my_handler)
+    # return a cleanup callable that disconnects the signal again
+    return [lambda: orig_layer.events.some_signal.disconnect(my_handler)]
 
 A hook is called once per layer, per orthogonal view, in registration order, as:
 
@@ -34,9 +52,8 @@ def emit_data(layer: Layer) -> None:
     """Announce that ``layer``'s array changed in place.
 
     napari does not emit ``data`` for every edit it makes to a layer (painting and
-    undo/redo change the array without it). Emitting the event is all a hook has to do
-     because the property syncing carries it to every other view, in whichever
-     direction the edit was made.
+    undo/redo change the array without it). The hook emits the event so that the existing
+    property syncing picks it up and carries it to the other views.
     """
 
     layer.events.data(value=layer.data)
