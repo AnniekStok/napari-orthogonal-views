@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from napari.components.viewer_model import ViewerModel
 from napari.utils.key_bindings import KeymapHandler
-from qtpy.QtCore import QPoint
+from qtpy.QtCore import QPoint, QRect
 from qtpy.QtWidgets import QWidget
 
 from napari_orthogonal_views import viewer_utils
@@ -21,6 +21,23 @@ from napari_orthogonal_views.viewer_utils import (
 )
 
 
+class FakeCanvas(QWidget):
+    """Canvas stand-in whose underMouse() does not depend on the real pointer.
+
+    Hovering has to be simulated: the pointer is wherever the machine running the tests
+    happens to have left it, and could sit over one of these widgets by chance. The
+    geometry branch of the lookup is driven by patching QCursor.pos (see hover), and this
+    pins the underMouse branch so neither answer comes from the environment.
+    """
+
+    def __init__(self, parent=None, under_mouse=False):
+        super().__init__(parent)
+        self.under_mouse = under_mouse
+
+    def underMouse(self):
+        return self.under_mouse
+
+
 @pytest.fixture
 def hoverable_canvases(qtbot):
     """Two visible widgets standing in for canvases, each with its own viewer model.
@@ -29,15 +46,16 @@ def hoverable_canvases(qtbot):
     level registry does not leak into other tests.
     """
 
+    container = QWidget()
+    qtbot.addWidget(container)
+    container.setFixedSize(300, 100)
+
     canvases = []
     models = []
     # side by side, so that a point inside one is outside the other
-    for x, cursor_position in [(0, (1, 2, 3)), (300, (7, 8, 9))]:
-        canvas = QWidget()
-        qtbot.addWidget(canvas)
+    for x, cursor_position in [(0, (1, 2, 3)), (200, (7, 8, 9))]:
+        canvas = FakeCanvas(container)
         canvas.setGeometry(x, 0, 100, 100)
-        canvas.show()
-        qtbot.waitExposed(canvas)
 
         model = ViewerModel()
         model.add_image(np.zeros((10, 10, 10), dtype=np.uint8))
@@ -52,6 +70,16 @@ def hoverable_canvases(qtbot):
         )
         canvases.append(canvas)
         models.append(model)
+
+    container.show()
+    qtbot.waitExposed(container)
+
+    # Guard the assumption the tests rest on, so that an environment which places the
+    # canvases on top of each other says so instead of failing an unrelated assertion.
+    rects = [QRect(c.mapToGlobal(QPoint(0, 0)), c.size()) for c in canvases]
+    assert not rects[0].intersects(
+        rects[1]
+    ), f"canvases overlap ({rects[0]} and {rects[1]}), so no point identifies one"
 
     yield canvases, models
 
@@ -82,6 +110,20 @@ def test_hovered_canvas_resolves_to_its_viewer_model(hoverable_canvases):
 
     with hover(None):
         assert viewer_model_under_mouse() is None
+
+
+def test_under_mouse_resolves_when_the_geometry_check_would_not(
+    hoverable_canvases,
+):
+    """A canvas Qt reports as hovered is picked even if the cursor position says
+    otherwise, which is what keeps the lookup working during a grab, when Qt's
+    enter/leave bookkeeping and the bare pointer position disagree."""
+
+    canvases, models = hoverable_canvases
+    canvases[1].under_mouse = True
+
+    with hover(None):
+        assert viewer_model_under_mouse() is models[1]
 
 
 def test_center_cross_uses_hovered_model_not_dispatching_model(
