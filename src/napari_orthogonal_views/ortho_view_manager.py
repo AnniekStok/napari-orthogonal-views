@@ -38,6 +38,7 @@ from napari_orthogonal_views.screen_recorder_widget import ScreenRecorderWidget
 from napari_orthogonal_views.viewer_utils import (
     activate_on_hover,
     center_cross_on_mouse,
+    register_canvas,
 )
 from napari_orthogonal_views.widget_controls import MainControlsWidget
 
@@ -104,9 +105,11 @@ class OrthoViewManager:
             warnings.simplefilter("ignore")
             self.viewer._overlays["crosshairs"] = self.crosshair_overlay
 
-        # make sure the viewer activates on hover
+        # make sure the viewer activates on hover, and that its canvas is a candidate
+        # for shortcuts acting on whichever canvas the mouse is over
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
+            register_canvas(self.viewer.window.qt_viewer)
             activate_on_hover(self.viewer.window.qt_viewer)
 
         # Define layer hook registry.

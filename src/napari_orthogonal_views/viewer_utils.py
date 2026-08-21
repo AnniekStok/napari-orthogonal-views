@@ -1,27 +1,67 @@
+import contextlib
+import weakref
+
 import numpy as np
 from napari.components.viewer_model import ViewerModel
 from napari.qt import QtViewer
 from qtpy.QtCore import QEvent, QObject, Qt
+from qtpy.QtGui import QCursor
+from qtpy.QtWidgets import QWidget
+
+# Canvases registered by register_canvas, mapped to the viewer model they show.
+# Weakly keyed so closed viewers drop out on their own.
+_HOVERABLE_CANVASES: weakref.WeakKeyDictionary[QWidget, ViewerModel] = (
+    weakref.WeakKeyDictionary()
+)
 
 
-def center_cross_on_mouse(
-    viewer_model: ViewerModel,
-):
-    """Center the viewer dimension step to the mouse position"""
+def register_canvas(qt_viewer: QtViewer) -> None:
+    """Make a canvas a candidate for shortcuts that act on the hovered viewer model."""
+
+    _HOVERABLE_CANVASES[qt_viewer.canvas.native] = qt_viewer.viewer
+
+
+def viewer_model_under_mouse() -> ViewerModel | None:
+    """Return the viewer model whose canvas the mouse is currently over, if any."""
+
+    pos = QCursor.pos()
+    for canvas, viewer_model in _HOVERABLE_CANVASES.items():
+        with contextlib.suppress(RuntimeError):
+            if not canvas.isVisible():
+                continue
+            if canvas.underMouse() or canvas.rect().contains(
+                canvas.mapFromGlobal(pos)
+            ):
+                return viewer_model
+    return None
+
+
+def center_cross_on_mouse(_viewer_model: ViewerModel):
+    """Center the viewer dimension step of the hovered canvas to the mouse position.
+
+    Instead of relying on which viewer_model received the signal, which may be outdated
+    due to focus loss, check which viewer_model currently has the cursor, and use that to
+    center the cross. Do not move the dims.step at all when the mouse cursor is not on
+    any canvas.
+    """
+
+    target = viewer_model_under_mouse()
+    if target is None:
+        return
 
     step = tuple(
         np.round(
             [
                 max(min_, min(p, max_)) / step
                 for p, (min_, max_, step) in zip(
-                    viewer_model.cursor.position,
-                    viewer_model.dims.range,
+                    target.cursor.position,
+                    target.dims.range,
                     strict=False,
                 )
             ]
         ).astype(int)
     )
-    viewer_model.dims.current_step = step
+    target.dims.current_step = step
 
 
 def activate_on_hover(qt_viewer: QtViewer):
