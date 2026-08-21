@@ -23,7 +23,10 @@ from napari_orthogonal_views.axes_utils import (
 )
 from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
 from napari_orthogonal_views.layer_sync_hooks import DEFAULT_LAYER_HOOKS
-from napari_orthogonal_views.viewer_utils import activate_on_hover
+from napari_orthogonal_views.viewer_utils import (
+    activate_on_hover,
+    register_canvas,
+)
 
 
 def copy_layer(layer: Layer, name: str = "") -> Layer:
@@ -625,6 +628,7 @@ class OrthoViewWidget(QWidget):
 
         # Create QtViewer instance with viewer model
         self.qt_viewer = QtViewer(self.vm_container.viewer_model)
+        register_canvas(self.qt_viewer)  # route shortcuts to hovered canvas
         activate_on_hover(self.qt_viewer)  # activate without clicking
         self.qt_viewer.setAcceptDrops(False)  # no drag and drop here
 
