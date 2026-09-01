@@ -828,6 +828,68 @@ def crosshair_position(qt_viewer):
     raise AssertionError("no crosshair overlay on this canvas")
 
 
+def test_a_listener_moving_the_dims_mid_sync_reaches_every_view(
+    make_napari_viewer, qtbot
+):
+    """A step change may make a listener move the dims somewhere else, and that new
+    position has to end up in every view.
+
+    The listener here mimics following a moving object through time: when the time
+    point changes on its own, it slides the z axis along with it. The view whose slider
+    was moved is the interesting one - it is the one distributing the change, so it
+    used to stay behind on its own z slider while the other views did follow.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    viewer.add_layer(Labels(np.zeros((5, 30, 40, 50), dtype=np.uint8)))
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    right = m.right_widget.vm_container.viewer_model
+    bottom = m.bottom_widget.vm_container.viewer_model
+
+    state = {"previous": tuple(viewer.dims.point), "busy": False}
+
+    def follow(event=None):
+        point = tuple(viewer.dims.point)
+        previous, state["previous"] = state["previous"], point
+        if (
+            state["busy"]
+            or previous[1:] != point[1:]
+            or previous[0] == point[0]
+        ):
+            return
+        state["busy"] = True
+        try:
+            viewer.dims.point = (point[0], point[1] + 1, *point[2:])
+        finally:
+            state["busy"] = False
+
+    def look_at(point):
+        """Put every view at `point` without the listener reacting to it."""
+        state["busy"] = True
+        try:
+            viewer.dims.point = point
+        finally:
+            state["busy"] = False
+        state["previous"] = tuple(viewer.dims.point)
+
+    viewer.dims.events.point.connect(follow)
+
+    for source in (viewer, right, bottom):
+        look_at((0, 10, 0, 0))
+
+        source.dims.set_current_step(0, 1)
+
+        expected = (1, 11, 0, 0)
+        assert tuple(viewer.dims.point) == expected
+        assert tuple(right.dims.point) == expected
+        assert tuple(bottom.dims.point) == expected
+
+    m.cleanup()
+
+
 def test_ortho_views_open_where_the_main_viewer_is_looking(
     make_napari_viewer, qtbot
 ):

@@ -616,7 +616,6 @@ class OrthoViewWidget(QWidget):
         self.sync_axes = sync_axes
         self._grid_syncing = False
         self._block_center = False
-        self._block_step = False
         # create container to store viewer model in
         self.vm_container = ViewerModelContainer(
             title="orthogonal view",
@@ -674,10 +673,11 @@ class OrthoViewWidget(QWidget):
         # Adjust dimension order for orthogonal views
         self._set_orth_views_dims_order()
 
-        # Position dims to where the main viewer is looking without emitting event
-        self._block_center = True
-        self.vm_container.viewer_model.dims.point = self.viewer.dims.point
-        self._block_center = False
+        # Position dims to where the main viewer is looking without syncing it back
+        with self.vm_container.viewer_model.dims.events.current_step.blocker(
+            self._update_current_step
+        ):
+            self.vm_container.viewer_model.dims.point = self.viewer.dims.point
 
         # reset the view to frame the data in the orthogonal view as well
         self.vm_container.viewer_model.reset_view()
@@ -781,47 +781,54 @@ class OrthoViewWidget(QWidget):
         self.vm_container.viewer_model.layers.move(event.index, dest_index)
 
     def _update_current_step(self, event: Event) -> None:
-        """Sync the current step between different viewer models.
+        """Sync the current step between the main viewer and the orthogonal view.
 
-        We sync using world coordinates (dims.point) rather than step indices
+        Sync using world coordinates (dims.point) rather than step indices
         (current_step) because each viewer model may have different dims.range
         values due to different layer scales or orientations. Syncing step
         indices directly would result in incorrect world positions.
+
+        The point is read from the source rather than rebuilt from the event, so that
+        the position another listener moved to in reaction to this change is the
+        one passed on, instead of the position the event was emitted with.
         """
 
-        if self._block_center:
+        source = event.source
+        other = (
+            self.vm_container.viewer_model
+            if source is self.viewer.dims
+            else self.viewer
+        )
+        point = tuple(source.point)
+
+        # other view has updated already, so no need to update again.
+        if tuple(other.dims.point) == point:
             return
 
-        self._block_center = True
-
-        # Convert source step indices to world coordinates
-        source = event.source
-        world_coords = tuple(
-            source.range[i].start + event.value[i] * source.range[i].step
-            for i in range(len(event.value))
-        )
-
-        for model in [
-            self.viewer,
-            self.vm_container.viewer_model,
-        ]:
-            if model.dims.order is event.source.order:
-                continue
-
+        with self._center_sync_blocked():
             # Set world coordinates - napari will convert to appropriate steps
             # for this model's dims.range
-            model.dims.point = world_coords
+            other.dims.point = point
 
             # check if the camera center is in the field of view, if not, adjust
-            camera_center = list(model.camera.center)
+            camera_center = list(other.camera.center)
             new_y_center, new_x_center = check_center(
-                model, model.dims.current_step
+                other, other.dims.current_step
             )
             camera_center[-2] = new_y_center
             camera_center[-1] = new_x_center
-            model.camera.center = camera_center
+            other.camera.center = camera_center
 
-        self._block_center = False
+    @contextlib.contextmanager
+    def _center_sync_blocked(self) -> Iterator[None]:
+        """Hold off the camera center syncing of CenterWidget while the centers are
+        being set."""
+
+        previous, self._block_center = self._block_center, True
+        try:
+            yield
+        finally:
+            self._block_center = previous
 
     def sync_event(
         self,
