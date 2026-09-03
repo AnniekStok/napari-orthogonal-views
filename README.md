@@ -127,7 +127,7 @@ m.register_layer_hook(Labels, report_clicks)
 allows the original layer in the main viewer to respond to click events in the ortho views. The property 'selected_label' will then automatically sync to the ortho views as well.
 
 ### Overriding the built-in behavior
-The built-in hooks are keyed by name (`labels_undo_redo`, `labels_paint`, `points_selection`) so a single one can be replaced without disturbing the others. Use this to keep the default behavior and add to it:
+The built-in hooks are keyed by name (`layer_tool`, `labels_undo_redo`, `labels_paint`, `points_selection`) so a single one can be replaced without disturbing the others. Use this to keep the default behavior and add to it:
 
 ```python
 from napari_orthogonal_views.layer_sync_hooks import sync_labels_paint
