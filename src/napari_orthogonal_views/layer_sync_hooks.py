@@ -7,6 +7,9 @@ layers, and selection on Points layers, are mirrored to the other views. This wo
 otherwise fail, because these operations do not emit events that the standard property
 syncing can pick up.
 
+The active tool and the layer visibility are handled here as well, because changing the
+visibility also changes the tool, which needs to be kept in sync.
+
 Custom hooks, that change the behavior of an ortho view for a particular layer type, can
 be added via manager.register_layer_hook(layer_type, hook).
 
@@ -46,6 +49,9 @@ from typing import Any
 from napari.layers import Labels, Layer, Points
 
 _MISSING = object()
+
+#: Layer properties that napari does not treat as plain state. They are kept synced by sync_layer_tool.
+TOOL_PROPERTIES = frozenset({"mode", "visible"})
 
 
 def emit_data(layer: Layer) -> None:
@@ -208,6 +214,92 @@ def sync_labels_paint(
     ]
 
 
+def sync_layer_tool(
+    orig_layer: Layer, copied_layer: Layer
+) -> list[tuple[Any, Callable]]:
+    """Keep the active tool (the layer mode) and the layer visibility identical on a
+    layer and its copies in the orthogonal views.
+
+    Both are synced here instead of through the generic property syncing, because napari
+    does not treat them as plain state and syncing them as such lets the views drift
+    apart: layer.mode silently becomes pan_zoom when the layer is invisible, and assigning a layer the mode it already holds emits nothing.
+    The original layer is the single source of truth. A change on either side is applied
+    to the other, and the tool is re-applied after every visibility change.
+
+    Args:
+        orig_layer: the layer on the main viewer.
+        copied_layer: its counterpart in the orthogonal view.
+
+    Returns:
+        The ``(signal, handler)`` pairs that were connected.
+    """
+
+    # prevent syncing back to itself
+    syncing = False
+
+    # Only layers of the same type can have their mode synced. Visibility should always be synced.
+    sync_mode = type(orig_layer)._modeclass is type(copied_layer)._modeclass
+
+    def reconcile() -> None:
+        """Bring the copy in line with the original: visibility first, then the tool."""
+
+        if copied_layer.visible != orig_layer.visible:
+            copied_layer.visible = orig_layer.visible
+        if sync_mode and copied_layer.mode != orig_layer.mode:
+            copied_layer.mode = orig_layer.mode
+
+    def from_orig(_event=None) -> None:
+        """Apply a change made on the original layer to this orthogonal view."""
+
+        nonlocal syncing
+        if syncing:
+            return
+        syncing = True
+        try:
+            reconcile()
+        finally:
+            syncing = False
+
+    def from_copy(_event=None) -> None:
+        """Apply a change made in this orthogonal view to the original layer."""
+
+        nonlocal syncing
+        if syncing:
+            return
+        syncing = True
+        try:
+            if orig_layer.visible != copied_layer.visible:
+                orig_layer.visible = copied_layer.visible
+            # A mode assigned to a hidden layer is coerced to pan_zoom, so leave the
+            # original alone while it is hidden, and let the visibility change carry the
+            # tool over instead.
+            if (
+                sync_mode
+                and orig_layer.visible
+                and orig_layer.mode != copied_layer.mode
+            ):
+                orig_layer.mode = copied_layer.mode
+            reconcile()
+        finally:
+            syncing = False
+
+        # Explicitely reread the visibility and mode from the original instead of relying on the signal that may not be have emitted (if there was no change).
+        orig_layer.events.visible()
+        if sync_mode:
+            orig_layer.events.mode(mode=str(orig_layer.mode))
+
+    connections: list[tuple[Any, Callable]] = []
+    for layer, handler in ((orig_layer, from_orig), (copied_layer, from_copy)):
+        for name in sorted(TOOL_PROPERTIES):
+            signal = getattr(layer.events, name)
+            signal.connect(handler)
+            connections.append((signal, handler))
+
+    from_orig()
+
+    return connections
+
+
 def sync_points_selection(
     orig_layer: Points, copied_layer: Points
 ) -> list[tuple[Any, Callable]]:
@@ -259,6 +351,7 @@ def sync_points_selection(
 
 # Define built-in hooks
 DEFAULT_LAYER_HOOKS: dict[str, tuple[type, Callable]] = {
+    "layer_tool": (Layer, sync_layer_tool),
     "labels_undo_redo": (Labels, sync_labels_undo_redo),
     "labels_paint": (Labels, sync_labels_paint),
     "points_selection": (Points, sync_points_selection),

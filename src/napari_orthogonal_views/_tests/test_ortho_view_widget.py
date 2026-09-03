@@ -2,7 +2,7 @@ import collections
 
 import numpy as np
 import pytest
-from napari.layers import Image, Labels, Points
+from napari.layers import Image, Labels, Points, Shapes
 
 from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
 from napari_orthogonal_views.layer_sync_hooks import (
@@ -1016,12 +1016,14 @@ def test_default_hooks_are_installed_without_registering_anything(
         container = widget.vm_container
         labels = Labels(np.zeros((5, 20, 20), dtype=np.uint8))
         assert [h.__name__ for h in container._hooks_for(labels)] == [
+            "sync_layer_tool",
             "sync_labels_undo_redo",
             "sync_labels_paint",
         ]
         points = Points(np.zeros((1, 3)))
         assert [h.__name__ for h in container._hooks_for(points)] == [
-            "sync_points_selection"
+            "sync_layer_tool",
+            "sync_points_selection",
         ]
 
     m.cleanup()
@@ -1058,9 +1060,15 @@ def test_built_in_hook_can_be_replaced_or_switched_off(
     for widget in (m.right_widget, m.bottom_widget):
         container = widget.vm_container
         names = [h.__name__ for h in container._hooks_for(viewer.layers[0])]
-        assert names == ["sync_labels_undo_redo", "replacement"]
+        assert names == [
+            "sync_layer_tool",
+            "sync_labels_undo_redo",
+            "replacement",
+        ]
         # the disabled one is gone, and it took its syncing with it
-        assert list(container._hooks_for(viewer.layers[1])) == []
+        assert [
+            h.__name__ for h in container._hooks_for(viewer.layers[1])
+        ] == ["sync_layer_tool"]
 
     viewer.layers[1].selected_data = {0}
     for widget in (m.right_widget, m.bottom_widget):
@@ -1129,5 +1137,92 @@ def test_crosshair_overlay_visibility(make_napari_viewer, qtbot):
     # which crashes because VispyCrosshairOverlay.__init__ has no **kwargs.
     m.right_widget.vm_container.crosshair_overlay.visible = True
     m.right_widget.vm_container.crosshair_overlay.visible = False
+
+    m.cleanup()
+
+
+def test_tool_and_visibility_stay_synced(make_napari_viewer, qtbot):
+    """The active tool must be the same in the main viewer and in both orthogonal views.
+
+    napari does not treat ``mode`` and ``visible`` as plain state: assigning a layer the
+    visibility it already has still swaps its tool for pan_zoom (or restores a stashed
+    one), a mode set while a layer is hidden is silently coerced to pan_zoom, and
+    assigning a layer the mode it already holds emits nothing at all. Synced as ordinary
+    properties, the three layers therefore drift apart and never converge again, which
+    leaves an orthogonal view showing a tool that is not the one that is active.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    viewer.add_layer(Labels(np.zeros((5, 20, 20), dtype=np.uint8)))
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    def layers():
+        return [
+            viewer.layers[0],
+            m.right_widget.vm_container.viewer_model.layers[0],
+            m.bottom_widget.vm_container.viewer_model.layers[0],
+        ]
+
+    def assert_mode(expected):
+        assert [layer.mode for layer in layers()] == [expected] * 3
+
+    orig, right, bottom = layers()
+
+    # the tool can be set from either side
+    assert_mode("pan_zoom")
+    right.mode = "erase"
+    assert_mode("erase")
+    bottom.mode = "paint"
+    assert_mode("paint")
+    orig.mode = "erase"
+    assert_mode("erase")
+
+    # and survives hiding and showing the layer from either side, including the
+    # assignments that do not actually change the visibility
+    for layer in layers():
+        layer.visible = False
+        assert [lay.visible for lay in layers()] == [False] * 3
+        assert_mode("pan_zoom")  # napari does not paint on a hidden layer
+
+        layer.visible = True
+        assert [lay.visible for lay in layers()] == [True] * 3
+        assert_mode("erase")
+
+        layer.visible = True  # a no-op that napari acts on anyway
+        assert_mode("erase")
+
+    m.cleanup()
+
+
+def test_tool_not_synced_between_layers_of_different_types(
+    make_napari_viewer, qtbot
+):
+    """A layer copied into the views as another type has no modes in common with its
+    original, so only its visibility is synced.
+
+    Applications do this to stand in for a layer that makes no sense in an orthogonal
+    view while keeping the layer indices of the viewer models lined up.
+    """
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    m.set_copy_layer(lambda layer, name="": Shapes(name=layer.name))
+    m.set_sync_filters(
+        {Image: {"forward_exclude": "*", "reverse_exclude": "*"}}
+    )
+    viewer.add_layer(Image(np.zeros((5, 20, 20))))
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    orig = viewer.layers[0]
+    copied = m.right_widget.vm_container.viewer_model.layers[0]
+
+    orig.mode = "transform"  # a mode both have, but through different enums
+    assert copied.mode == "pan_zoom"
+
+    orig.visible = False
+    assert copied.visible is False
 
     m.cleanup()

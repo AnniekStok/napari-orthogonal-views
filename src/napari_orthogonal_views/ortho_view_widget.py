@@ -22,7 +22,10 @@ from napari_orthogonal_views.axes_utils import (
     set_axes_visible,
 )
 from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
-from napari_orthogonal_views.layer_sync_hooks import DEFAULT_LAYER_HOOKS
+from napari_orthogonal_views.layer_sync_hooks import (
+    DEFAULT_LAYER_HOOKS,
+    TOOL_PROPERTIES,
+)
 from napari_orthogonal_views.viewer_utils import (
     activate_on_hover,
     register_canvas,
@@ -131,6 +134,11 @@ def get_property_names(
 
     # Skip specific properties that cannot sync because they are not shown on ortho views
     skip_props = {"thumbnail", "name", "scale_factor"}
+    if isinstance(obj, Layer):
+        # A layer's own mode and visibility are synced by the layer_tool hook instead,
+        # because assigning them has side effects (see sync_layer_tool). Only a layer's
+        # own: nested models keep their 'visible' (overlays, text).
+        skip_props |= TOOL_PROPERTIES
     added_props = set()
 
     klass = obj.__class__
