@@ -3,6 +3,7 @@ import collections
 import numpy as np
 import pytest
 from napari.layers import Image, Labels, Points, Shapes
+from napari.utils.events import Event
 
 from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
 from napari_orthogonal_views.layer_sync_hooks import (
@@ -1224,5 +1225,58 @@ def test_tool_not_synced_between_layers_of_different_types(
 
     orig.visible = False
     assert copied.visible is False
+
+    m.cleanup()
+
+
+def test_step_sync_does_not_depend_on_recognising_the_event_source(
+    make_napari_viewer, qtbot
+):
+    """A step change reaches the orthogonal view even if the event's source is not
+    the object the widget compares against.
+    """
+
+    viewer = make_napari_viewer()
+    viewer.add_image(np.zeros((20, 30, 40), dtype=np.uint8))
+    m = _get_manager(viewer)
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+    right = m.right_widget.vm_container.viewer_model
+    bottom = m.bottom_widget.vm_container.viewer_model
+
+    viewer.dims.current_step = (5, 5, 5)
+    assert tuple(right.dims.current_step) == (5, 5, 5)
+    assert tuple(bottom.dims.current_step) == (5, 5, 5)
+
+    # move the main viewer with the normal sync switched off, so the orthogonal views
+    # stay behind and the dispatch below is the only thing that can bring them along
+    emitter = viewer.dims.events.current_step
+    with (
+        emitter.blocker(m.right_widget._update_current_step),
+        emitter.blocker(m.bottom_widget._update_current_step),
+    ):
+        viewer.dims.point = (9.0, 11.0, 13.0)
+
+    assert tuple(right.dims.current_step) == (5, 5, 5)
+    assert tuple(bottom.dims.current_step) == (5, 5, 5)
+
+    # now hand the handlers an event carrying the main viewer's position under a source
+    # the widget cannot match by identity, the way a re-emitted event would
+
+    class _Relay:
+        """Stands in for a source that is not identical to viewer.dims."""
+
+        def __init__(self, dims):
+            self.point = tuple(dims.point)
+
+    event = Event("current_step", value=(9, 11, 13))
+    event._push_source(_Relay(viewer.dims))
+
+    for widget in (m.right_widget, m.bottom_widget):
+        widget._update_current_step(event)
+
+    assert tuple(right.dims.current_step) == (9, 11, 13)
+    assert tuple(bottom.dims.current_step) == (9, 11, 13)
 
     m.cleanup()
