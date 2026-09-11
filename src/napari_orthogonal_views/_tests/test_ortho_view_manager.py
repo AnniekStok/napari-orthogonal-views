@@ -400,3 +400,110 @@ def test_show_axes(make_napari_viewer, qtbot):
         assert not axes_visible(view_model)
 
     m.cleanup()
+
+
+class TestAxisLabels:
+    """The orthogonal views share the main viewer's axis labels.
+
+    Labels used to be hardcoded to a suffix of ("c","t","z","y","x") and written
+    onto the main viewer, which mislabelled any viewer that was not exactly that
+    shape and overwrote whatever the user or a plugin had set. Now nothing is
+    invented, and a rename can start on either side: the views put different axes
+    on their sliders, so for some axes an ortho slider is the only place the user
+    can reach the label at all.
+    """
+
+    def _shown(self, viewer, qtbot, shape=(3, 10, 32, 32)):
+        viewer.add_image(np.random.rand(*shape), name="data")
+        m = _get_manager(viewer)
+        show_orthogonal_views(viewer)
+        qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+        return m
+
+    def test_labels_are_shared_not_invented(self, make_napari_viewer, qtbot):
+        """A (c, t, y, x) stack used to come out labelled ("t","z","y","x"), so the
+        channel was called "t" and time was called "z"."""
+
+        viewer = make_napari_viewer()
+        # the labels are set after the data, or there are not yet as many axes to
+        # name as the stack will bring, and napari pads the front with defaults
+        viewer.add_image(np.random.rand(2, 3, 32, 32), name="data")
+        viewer.dims.axis_labels = ("c", "t", "y", "x")
+
+        m = _get_manager(viewer)
+        show_orthogonal_views(viewer)
+        qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+
+        # showing the views leaves the main viewer's labels alone
+        assert tuple(viewer.dims.axis_labels) == ("c", "t", "y", "x")
+        for widget in (m.right_widget, m.bottom_widget):
+            model = widget.vm_container.viewer_model
+            assert tuple(model.dims.axis_labels) == ("c", "t", "y", "x")
+
+        m.cleanup()
+
+    def test_renames_sync_in_both_directions_without_echoing(
+        self, make_napari_viewer, qtbot
+    ):
+        viewer = make_napari_viewer()
+        m = self._shown(viewer, qtbot)
+        viewer.dims.axis_labels = ("t", "z", "y", "x")
+        qtbot.wait(50)
+        right = m.right_widget.vm_container.viewer_model
+        bottom = m.bottom_widget.vm_container.viewer_model
+
+        emitted = []
+        viewer.dims.events.axis_labels.connect(
+            lambda event: emitted.append(tuple(viewer.dims.axis_labels))
+        )
+
+        # a rename made on an ortho view reaches the main viewer, and through it
+        # the sibling view
+        right.dims.set_axis_label(1, "depth")
+        qtbot.wait(50)
+        assert viewer.dims.axis_labels[1] == "depth"
+        assert bottom.dims.axis_labels[1] == "depth"
+
+        # each direction answers the other, so the sync settles rather than bounces
+        assert len(emitted) == 1
+
+        # and it works from the main viewer and the other view too
+        viewer.dims.set_axis_label(0, "frame")
+        qtbot.wait(50)
+        bottom.dims.set_axis_label(3, "col")
+        qtbot.wait(50)
+
+        expected = ("frame", "depth", "y", "col")
+        for model in (viewer, right, bottom):
+            assert tuple(model.dims.axis_labels) == expected
+
+        m.cleanup()
+
+    def test_labels_survive_a_roll_and_a_new_layer(
+        self, make_napari_viewer, qtbot
+    ):
+        """Labels are indexed by world axis, so a roll must not shuffle them, and
+        growing ndim prepends so the named axes keep the tail. Adding a layer also
+        re-runs the dims setup, which must not undo a rename by pushing stale
+        labels back out."""
+
+        viewer = make_napari_viewer()
+        m = self._shown(viewer, qtbot)
+        viewer.dims.axis_labels = ("t", "z", "y", "x")
+        qtbot.wait(50)
+        right = m.right_widget.vm_container.viewer_model
+
+        right.dims.set_axis_label(1, "depth")
+        qtbot.wait(50)
+
+        viewer.dims.roll()
+        qtbot.wait(50)
+        assert tuple(viewer.dims.axis_labels) == ("t", "depth", "y", "x")
+        assert tuple(right.dims.axis_labels) == ("t", "depth", "y", "x")
+
+        viewer.add_image(np.random.rand(2, 3, 10, 32, 32), name="channels")
+        qtbot.wait(50)
+        assert tuple(viewer.dims.axis_labels)[1:] == ("t", "depth", "y", "x")
+        assert tuple(right.dims.axis_labels) == tuple(viewer.dims.axis_labels)
+
+        m.cleanup()
