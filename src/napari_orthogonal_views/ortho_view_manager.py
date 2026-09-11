@@ -23,6 +23,10 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from napari_orthogonal_views.attribute_helpers import (
+    get_scene_overlay,
+    set_scene_overlay,
+)
 from napari_orthogonal_views.axes_utils import set_axes_visible
 from napari_orthogonal_views.cross_hair_overlay import (
     CrosshairOverlay,
@@ -101,9 +105,7 @@ class OrthoViewManager:
         self.crosshair_overlay = CrosshairOverlay(
             blending="translucent_no_depth", axis_order=(-3, -2, -1)
         )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            self.viewer._overlays["crosshairs"] = self.crosshair_overlay
+        set_scene_overlay(self.viewer, "crosshairs", self.crosshair_overlay)
 
         # make sure the viewer activates on hover, and that its canvas is a candidate
         # for shortcuts acting on whichever canvas the mouse is over
@@ -266,17 +268,12 @@ class OrthoViewManager:
 
         state = state == 2
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            self.viewer._overlays["crosshairs"].visible = state
-            if isinstance(self.right_widget, OrthoViewWidget):
-                self.right_widget.vm_container.viewer_model._overlays[
-                    "crosshairs"
-                ].visible = state
-            if isinstance(self.bottom_widget, OrthoViewWidget):
-                self.bottom_widget.vm_container.viewer_model._overlays[
-                    "crosshairs"
-                ].visible = state
+        get_scene_overlay(self.viewer, "crosshairs").visible = state
+        for widget in (self.right_widget, self.bottom_widget):
+            if isinstance(widget, OrthoViewWidget):
+                get_scene_overlay(
+                    widget.vm_container.viewer_model, "crosshairs"
+                ).visible = state
 
     def set_zoom_sync(self, state: bool = True) -> None:
         """Activate the zoom syncing in the controls widget"""

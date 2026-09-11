@@ -822,7 +822,13 @@ def test_layer_hook(make_napari_viewer, qtbot):
 def crosshair_position(qt_viewer):
     """Return the world position the crosshair visual is currently drawn at."""
 
-    for overlay, visual in qt_viewer.canvas._overlay_to_visual.items():
+    # napari 0.9 renamed the canvas' viewer-overlay map.
+    canvas = qt_viewer.canvas
+    overlay_to_visual = getattr(
+        canvas, "_viewer_overlay_to_visual", None
+    ) or getattr(canvas, "_overlay_to_visual", {})
+
+    for overlay, visual in overlay_to_visual.items():
         if isinstance(overlay, CrosshairOverlay):
             visual = visual[0] if isinstance(visual, list) else visual
             return np.asarray(visual.node._pos)[0]

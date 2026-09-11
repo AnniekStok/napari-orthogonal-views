@@ -5,6 +5,7 @@ from unittest.mock import patch
 import numpy as np
 from qtpy.QtWidgets import QWidget
 
+from napari_orthogonal_views.attribute_helpers import get_camera, get_grid
 from napari_orthogonal_views.axes_utils import (
     AXES_POSITION,
     HAS_FLOATING_AXES,
@@ -53,7 +54,7 @@ def test_sync_camera(make_napari_viewer, qtbot):
     # Test zoom sync
     m.set_zoom_sync(True)
     w = m.right_widget
-    zoom_emitter = m.viewer.camera.events.zoom
+    zoom_emitter = get_camera(m.viewer).events.zoom
 
     # Check if any (emitter, handler) in _connections has this emitter
     assert any(em == zoom_emitter for em, _ in w._connections)
@@ -64,7 +65,7 @@ def test_sync_camera(make_napari_viewer, qtbot):
 
     # Test center sync
     m.set_center_sync(True)
-    center_emitter = m.viewer.camera.events.center
+    center_emitter = get_camera(m.viewer).events.center
     assert any(em == center_emitter for em, _ in w._connections)
     m.set_center_sync(False)
     assert not any(em == center_emitter for em, _ in w._connections)
@@ -83,15 +84,17 @@ def test_sync_grid(make_napari_viewer, qtbot):
 
     m.set_grid_sync(True)
     w = m.right_widget
-    grid_emitter = m.viewer.grid.events
+
+    grid = get_grid(m.viewer)
+    grid_emitter = grid.events
 
     # Check if any (emitter, handler) in _connections has this emitter
     assert any(em == grid_emitter for em, _ in w._connections)
 
     # Check that grid enabling is synced
-    viewer.grid.enabled = True
+    grid.enabled = True
     qtbot.waitUntil(
-        lambda: w.vm_container.viewer_model.grid.enabled is True,
+        lambda: get_grid(w.vm_container.viewer_model).enabled is True,
         timeout=1000,
     )
 

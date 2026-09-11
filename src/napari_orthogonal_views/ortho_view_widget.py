@@ -1,5 +1,4 @@
 import contextlib
-import warnings
 from collections.abc import Callable, Iterable, Iterator
 from functools import partial
 from typing import Any
@@ -10,12 +9,18 @@ from napari.layers import Labels, Layer
 from napari.qt import QtViewer
 from napari.utils.colormaps import Colormap
 from napari.utils.events import Event, EventEmitter
+from napari.utils.events.event import WarningEmitter
 from psygnal.containers import Selection
 from qtpy.QtWidgets import (
     QHBoxLayout,
     QWidget,
 )
 
+from napari_orthogonal_views.attribute_helpers import (
+    get_camera,
+    get_viewbox_size,
+    set_scene_overlay,
+)
 from napari_orthogonal_views.axes_utils import (
     axes_visible,
     get_axes,
@@ -118,6 +123,7 @@ def get_property_names(
     For layers: only include settable properties.
     For nested objects: include public properties. Colormap and Selection are skipped
     because these cannot sync reliably as properties and need their own functions instead.
+    Deprecated properties are skipped by checking for WarningEmitters.
 
     Args:
         obj: The object to analyze (Layer or nested EventedModel)
@@ -141,12 +147,20 @@ def get_property_names(
         skip_props |= TOOL_PROPERTIES
     added_props = set()
 
+    # properties napari has deprecated
+    deprecated_props = set()
+
     klass = obj.__class__
 
     # Collect signal-backed properties
     for event_name, _signal in _iter_event_signals(obj.events):
 
         if event_name in skip_props or event_name.startswith("_"):
+            continue
+
+        # filter out properties that trigger a WarningEmitter
+        if isinstance(_signal, WarningEmitter):
+            deprecated_props.add(event_name)
             continue
 
         if event_name in added_props:
@@ -173,6 +187,7 @@ def get_property_names(
                 attr_name.startswith("_")
                 or attr_name in skip_props
                 or attr_name in added_props
+                or attr_name in deprecated_props
                 or attr_name.isupper()
             ):
                 continue
@@ -243,9 +258,9 @@ class ViewerModelContainer:
         self.crosshair_overlay = CrosshairOverlay(
             blending="translucent_no_depth", axis_order=order
         )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            self.viewer_model._overlays["crosshairs"] = self.crosshair_overlay
+        set_scene_overlay(
+            self.viewer_model, "crosshairs", self.crosshair_overlay
+        )
 
     def _setup_property_sync(
         self,
@@ -845,13 +860,14 @@ class OrthoViewWidget(QWidget):
                 model.dims.point = point
 
                 # check if the camera center is in the field of view, if not, adjust
-                camera_center = list(model.camera.center)
+                camera = get_camera(model)
+                camera_center = list(camera.center)
                 new_y_center, new_x_center = check_center(
                     model, model.dims.current_step
                 )
                 camera_center[-2] = new_y_center
                 camera_center[-1] = new_x_center
-                model.camera.center = camera_center
+                camera.center = camera_center
 
     @contextlib.contextmanager
     def _center_sync_blocked(self) -> Iterator[None]:
@@ -876,7 +892,7 @@ class OrthoViewWidget(QWidget):
 
         Args:
             source_emitter (napari EventEmitter)
-                The source event emitter (e.g., viewer.camera.events.zoom).
+                The source event emitter (e.g., viewer.[scene].camera.events.zoom).
             target_callable (callable)
                 Function to call when the source event fires.
                 Signature: target_callable(event)
@@ -935,11 +951,10 @@ def check_center(model: ViewerModel, coords: list[int]) -> tuple[int, int]:
         are visible.
     """
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        view_box = model._get_viewbox_size()
-    zoom = model.camera.zoom
-    center = model.camera.center
+    view_box = get_viewbox_size(model)
+    camera = get_camera(model)
+    zoom = camera.zoom
+    center = camera.center
     h = view_box[0] / zoom
     w = view_box[1] / zoom
     min_h = center[-2] - (h / 2)

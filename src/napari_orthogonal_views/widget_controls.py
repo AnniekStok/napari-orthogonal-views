@@ -7,6 +7,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from napari_orthogonal_views.attribute_helpers import get_camera, get_grid
 from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
 )
@@ -114,8 +115,8 @@ class GridWidget(QCheckBox):
         widget._grid_syncing = True
         try:
             self._copy_grid(
-                widget.viewer.grid,
-                widget.vm_container.viewer_model.grid,
+                get_grid(widget.viewer),
+                get_grid(widget.vm_container.viewer_model),
             )
         finally:
             widget._grid_syncing = False
@@ -126,8 +127,8 @@ class GridWidget(QCheckBox):
         widget._grid_syncing = True
         try:
             self._copy_grid(
-                widget.vm_container.viewer_model.grid,
-                widget.viewer.grid,
+                get_grid(widget.vm_container.viewer_model),
+                get_grid(widget.viewer),
             )
         finally:
             widget._grid_syncing = False
@@ -142,13 +143,13 @@ class GridWidget(QCheckBox):
             # push initial state when enabling
             if sync:
                 self._copy_grid(
-                    widget.viewer.grid,
-                    widget.vm_container.viewer_model.grid,
+                    get_grid(widget.viewer),
+                    get_grid(widget.vm_container.viewer_model),
                 )
 
             # viewer -> vm
             widget.sync_event(
-                widget.viewer.grid.events,
+                get_grid(widget.viewer).events,
                 lambda e, w=widget: self._viewer_to_vm(w, e),
                 sync,
                 key_label="grid_viewer_to_vm",
@@ -156,7 +157,7 @@ class GridWidget(QCheckBox):
 
             # vm -> viewer
             widget.sync_event(
-                widget.vm_container.viewer_model.grid.events,
+                get_grid(widget.vm_container.viewer_model).events,
                 lambda e, w=widget: self._vm_to_viewer(w, e),
                 sync,
                 key_label="grid_vm_to_viewer",
@@ -176,18 +177,17 @@ class ZoomWidget(QCheckBox):
 
         for widget in self.widgets:
 
+            viewer_camera = get_camera(widget.viewer)
+            vm_camera = get_camera(widget.vm_container.viewer_model)
+
             if state == 2:
-                widget.vm_container.viewer_model.camera.zoom = (
-                    widget.viewer.camera.zoom
-                )
+                vm_camera.zoom = viewer_camera.zoom
 
             # main viewer to ortho view
             widget.sync_event(
-                widget.viewer.camera.events.zoom,
-                lambda e, w=widget: setattr(
-                    w.vm_container.viewer_model.camera,
-                    "zoom",
-                    w.viewer.camera.zoom,
+                viewer_camera.events.zoom,
+                lambda e, src=viewer_camera, dst=vm_camera: setattr(
+                    dst, "zoom", src.zoom
                 ),
                 state,
                 key_label="zoom_viewer_to_vm",
@@ -195,11 +195,9 @@ class ZoomWidget(QCheckBox):
 
             # Reverse sync from ortho view to main view
             widget.sync_event(
-                widget.vm_container.viewer_model.camera.events.zoom,
-                lambda e, w=widget: setattr(
-                    w.viewer.camera,
-                    "zoom",
-                    w.vm_container.viewer_model.camera.zoom,
+                vm_camera.events.zoom,
+                lambda e, src=vm_camera, dst=viewer_camera: setattr(
+                    dst, "zoom", src.zoom
                 ),
                 state,
                 key_label="zoom_vm_to_viewer",
@@ -219,19 +217,22 @@ class CenterWidget(QCheckBox):
 
         for widget in self.widgets:
 
+            viewer_camera = get_camera(widget.viewer)
+            vm_camera = get_camera(widget.vm_container.viewer_model)
+
             # create handler to sync specific axis
-            def make_handler(w, source_viewer, target_viewer):
+            def make_handler(w, source_camera, target_camera):
                 def handler(event=None):
                     if w._block_center:
                         return
                     w._block_center = True
                     try:
-                        src_center = list(source_viewer.camera.center)
-                        tgt_center = list(target_viewer.camera.center)
+                        src_center = list(source_camera.center)
+                        tgt_center = list(target_camera.center)
                         for ax in w.sync_axes:
                             # to ensure cross hairs are aligned
                             tgt_center[ax] = src_center[ax]
-                        target_viewer.camera.center = tuple(tgt_center)
+                        target_camera.center = tuple(tgt_center)
                     finally:
                         w._block_center = False
 
@@ -239,34 +240,24 @@ class CenterWidget(QCheckBox):
 
             # Forward sync
             widget.sync_event(
-                widget.viewer.camera.events.center,
-                make_handler(
-                    widget,
-                    widget.viewer,
-                    widget.vm_container.viewer_model,
-                ),
+                viewer_camera.events.center,
+                make_handler(widget, viewer_camera, vm_camera),
                 state,
                 key_label=f"center_viewer_to_vm_{id(widget)}",
             )
 
             # Reverse sync
             widget.sync_event(
-                widget.vm_container.viewer_model.camera.events.center,
-                make_handler(
-                    widget,
-                    widget.vm_container.viewer_model,
-                    widget.viewer,
-                ),
+                vm_camera.events.center,
+                make_handler(widget, vm_camera, viewer_camera),
                 state,
                 key_label=f"center_vm_to_viewer_{id(widget)}",
             )
 
             if state == 2:
                 # Align the camera centers immediately, along the shared axes only
-                viewer_center = list(widget.viewer.camera.center)
-                widget_center = list(
-                    widget.vm_container.viewer_model.camera.center
-                )
+                viewer_center = list(viewer_camera.center)
+                widget_center = list(vm_camera.center)
                 for axis in widget.sync_axes:
                     widget_center[axis] = viewer_center[axis]
-                widget.vm_container.viewer_model.camera.center = widget_center
+                vm_camera.center = widget_center
