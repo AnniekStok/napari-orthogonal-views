@@ -843,31 +843,31 @@ class OrthoViewWidget(QWidget):
         """
 
         source = event.source
-        other = (
-            self.vm_container.viewer_model
-            if source is self.viewer.dims
-            else self.viewer
-        )
         point = tuple(source.point)
 
-        # other view has updated already, so no need to update again.
-        if tuple(other.dims.point) == point:
-            return
+        for model in (self.viewer, self.vm_container.viewer_model):
+            # the emitting view is already at this point by definition
+            if model.dims is source:
+                continue
 
-        with self._center_sync_blocked():
-            # Set world coordinates - napari will convert to appropriate steps
-            # for this model's dims.range
-            other.dims.point = point
+            # this view has updated already, so no need to update it again
+            if tuple(model.dims.point) == point:
+                continue
 
-            # check if the camera center is in the field of view, if not, adjust
-            other_camera = get_camera(other)
-            camera_center = list(other_camera.center)
-            new_y_center, new_x_center = check_center(
-                other, other.dims.current_step
-            )
-            camera_center[-2] = new_y_center
-            camera_center[-1] = new_x_center
-            other_camera.center = camera_center
+            with self._center_sync_blocked():
+                # Set world coordinates - napari will convert to appropriate steps
+                # for this model's dims.range
+                model.dims.point = point
+
+                # check if the camera center is in the field of view, if not, adjust
+                camera = get_camera(model)
+                camera_center = list(camera.center)
+                new_y_center, new_x_center = check_center(
+                    model, model.dims.current_step
+                )
+                camera_center[-2] = new_y_center
+                camera_center[-1] = new_x_center
+                camera.center = camera_center
 
     @contextlib.contextmanager
     def _center_sync_blocked(self) -> Iterator[None]:
@@ -892,7 +892,7 @@ class OrthoViewWidget(QWidget):
 
         Args:
             source_emitter (napari EventEmitter)
-                The source event emitter (e.g., viewer.camera.events.zoom).
+                The source event emitter (e.g., viewer.[scene].camera.events.zoom).
             target_callable (callable)
                 Function to call when the source event fires.
                 Signature: target_callable(event)
