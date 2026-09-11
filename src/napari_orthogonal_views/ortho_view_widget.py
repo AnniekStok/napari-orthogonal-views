@@ -692,6 +692,13 @@ class OrthoViewWidget(QWidget):
             self.vm_container.viewer_model.dims.events.current_step,
             self._update_current_step,
         )  # reverse dims sync
+        self._connect(
+            self.viewer.dims.events.axis_labels, self._sync_axis_labels
+        )  # follow renames made on the main viewer's sliders
+        self._connect(
+            self.vm_container.viewer_model.dims.events.axis_labels,
+            self._sync_axis_labels,
+        )  # reverse sync: renames made on this view's own sliders
 
         # Adjust dimension order for orthogonal views
         self._set_orth_views_dims_order()
@@ -721,17 +728,10 @@ class OrthoViewWidget(QWidget):
             self._connections.remove((emitter, handler))
 
     def _set_orth_views_dims_order(self) -> None:
-        """Set the order of the c, t, z, y, x dims in the orthogonal views, using the
-        axis order attribute."""
+        """Set the order of the dims in the orthogonal views, using the axis order
+        attribute."""
 
-        # TODO: allow the user to provide the dimension order and names.
-        axis_labels = (
-            "c",
-            "t",
-            "z",
-            "y",
-            "x",
-        )  # assume default axis labels for now
+        # TODO: allow the user to provide the dimension order.
         order = list(self.viewer.dims.order)
 
         if len(order) > 2:
@@ -744,17 +744,43 @@ class OrthoViewWidget(QWidget):
             )
             self.vm_container.viewer_model.dims.order = m_order
 
-        self.viewer.dims.axis_labels = axis_labels[
-            len(axis_labels) - len(order) :
-        ]
-        self.vm_container.viewer_model.dims.axis_labels = axis_labels[
-            len(axis_labels) - len(order) :
-        ]
+        self._sync_axis_labels()
 
         # whether or not the axis should be visible
         set_axes_visible(
             self.vm_container.viewer_model, axes_visible(self.viewer)
         )
+
+    def _sync_axis_labels(self, event: Event | None = None) -> None:
+        """Sync the axis labels between the main viewer and the orthogonal view.
+
+        Labels are indexed by world axis, like ``dims.point`` and ``dims.range``,
+        so they carry across without reordering, and rolling the dim order leaves
+        them alone.
+
+        Args:
+            event (Event | None): The axis_labels event that triggered the sync,
+                whose source decides the direction. None when called directly, to
+                push the main viewer's labels out to this view.
+        """
+
+        model_dims = self.vm_container.viewer_model.dims
+        from_model = event is not None and event.source is model_dims
+        source = model_dims if from_model else self.viewer.dims
+        target = self.viewer.dims if from_model else model_dims
+
+        labels = tuple(source.axis_labels)
+
+        # The two models can disagree on ndim for as long as it takes a layer to be
+        # copied across; the sync that follows the copy settles it.
+        if len(labels) != target.ndim:
+            return
+
+        # Already in sync.
+        if tuple(target.axis_labels) == labels:
+            return
+
+        target.axis_labels = labels
 
     def _reset_view(self) -> None:
         """Propagate the reset view event"""
