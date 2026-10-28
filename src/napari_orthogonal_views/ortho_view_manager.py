@@ -275,28 +275,23 @@ class OrthoViewManager:
                     widget.vm_container.viewer_model, "crosshairs"
                 ).visible = state
 
-    def set_zoom_sync(self, state: bool = True) -> None:
-        """Activate the zoom syncing in the controls widget"""
+    def set_camera_sync(self, state: bool = True) -> None:
+        """Activate the camera syncing in the controls widget"""
         if not self.is_shown():
             return
 
-        self.main_controls_widget.controls_widget.zoom_widget.setChecked(state)
-
-    def set_center_sync(self, state: bool = True) -> None:
-        """Activate the center syncing in the controls widget"""
-        if not self.is_shown():
-            return
-
-        self.main_controls_widget.controls_widget.center_widget.setChecked(
+        self.main_controls_widget.controls_widget.camera_widget.setChecked(
             state
         )
 
-    def set_grid_sync(self, state: bool = True) -> None:
-        """Activate the grid syncing in the controls widget"""
+    def set_display_mode_sync(self, state: bool = True) -> None:
+        """Activate the display syncing in the controls widget"""
         if not self.is_shown():
             return
 
-        self.main_controls_widget.controls_widget.grid_widget.setChecked(state)
+        self.main_controls_widget.controls_widget.display_mode_widget.setChecked(
+            state
+        )
 
     @property
     def layer_hooks(self) -> Mapping[str, tuple[type, Callable | None]]:
@@ -476,8 +471,7 @@ class OrthoViewManager:
         # activate specific checkboxes by default (grid is excluded)
         if self.activate_checkboxes:
             self.set_cross_hairs(True)
-            self.set_zoom_sync(True)
-            self.set_center_sync(True)
+            self.set_camera_sync(True)
 
     def center_crosshairs(self) -> None:
         """Move the crosshairs to the middle of the data along the displayed axes."""
