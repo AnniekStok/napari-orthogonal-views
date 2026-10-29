@@ -46,7 +46,7 @@ def set_axes_visible(viewer: ViewerModel, visible: bool) -> None:
     """Show or hide the axes of the viewer, in the top left corner if possible."""
 
     axes = get_axes(viewer)
-    axes.box = False  # no black box around the axes
     if PINNED_AXES:
         axes.position = AXES_POSITION
+        axes.box = False  # no black box around the axes
     axes.visible = visible
