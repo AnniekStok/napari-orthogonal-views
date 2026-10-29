@@ -37,12 +37,15 @@ from napari_orthogonal_views.viewer_utils import (
 )
 
 
-def copy_layer(layer: Layer, name: str = "") -> Layer:
+def copy_layer(
+    layer: Layer, name: str = "", axis_order: list[int] | None = None
+) -> Layer:
     """Clone a napari layer from its data (shallow copy, both original layer and copied
     layer share the same underlying data)."""
 
     copied_layer = Layer.create(*layer.as_layer_data_tuple())
     copied_layer.metadata["viewer_name"] = name
+    copied_layer.metadata["axis_order"] = axis_order
 
     # connect to the same undo/redo history in the case of labels layers
     if isinstance(layer, Labels):
@@ -139,7 +142,7 @@ def get_property_names(
         return emitter_list
 
     # Skip specific properties that cannot sync because they are not shown on ortho views
-    skip_props = {"thumbnail", "name", "scale_factor"}
+    skip_props = {"thumbnail", "name", "scale_factor", "plane", "metadata"}
     if isinstance(obj, Layer):
         # A layer's own mode and visibility are synced by the layer_tool hook instead,
         # because assigning them has side effects (see sync_layer_tool). Only a layer's
@@ -235,6 +238,7 @@ class ViewerModelContainer:
         self.viewer_model = ViewerModel(title)
         set_axes_visible(self.viewer_model, True)
         self._block = False
+        self.order = order
         self.sync_filters = sync_filters or {}
 
         # Register per-layer-type behaviour.
@@ -542,7 +546,7 @@ class ViewerModelContainer:
         """Set the layers of the contained ViewerModel."""
 
         self.viewer_model.layers.insert(
-            index, self.copy_layer(orig_layer, self.title)
+            index, self.copy_layer(orig_layer, self.title, self.order)
         )
         copied_layer = self.viewer_model.layers[orig_layer.name]
 
