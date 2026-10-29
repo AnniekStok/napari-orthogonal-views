@@ -1026,11 +1026,13 @@ def test_default_hooks_are_installed_without_registering_anything(
             "sync_layer_tool",
             "sync_labels_undo_redo",
             "sync_labels_paint",
+            "sync_clipping_plane_hook",
         ]
         points = Points(np.zeros((1, 3)))
         assert [h.__name__ for h in container._hooks_for(points)] == [
             "sync_layer_tool",
             "sync_points_selection",
+            "sync_clipping_plane_hook",
         ]
 
     m.cleanup()
@@ -1071,11 +1073,12 @@ def test_built_in_hook_can_be_replaced_or_switched_off(
             "sync_layer_tool",
             "sync_labels_undo_redo",
             "replacement",
+            "sync_clipping_plane_hook",
         ]
         # the disabled one is gone, and it took its syncing with it
         assert [
             h.__name__ for h in container._hooks_for(viewer.layers[1])
-        ] == ["sync_layer_tool"]
+        ] == ["sync_layer_tool", "sync_clipping_plane_hook"]
 
     viewer.layers[1].selected_data = {0}
     for widget in (m.right_widget, m.bottom_widget):
