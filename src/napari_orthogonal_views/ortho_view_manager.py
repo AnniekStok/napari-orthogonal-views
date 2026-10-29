@@ -567,10 +567,8 @@ class OrthoViewManager:
 
     def update_dims_order(self):
         """When the dimension order is updated in the main viewer, also update the dim
-        order in the orthogonal views. If there are more than 3 dimensions, the extra
-        dimensions are kept in the same order, and the remaining dimensions are reordered
-        according to the orthoviews' order: (-1, -2, -3) for right, and (-2, -3, -1) for
-        bottom. Also trigger update of the crosshairs axis order, to keep the crosshair
+        order in the orthogonal views (see OrthoViewWidget._set_orth_views_dims_order).
+        Also trigger update of the crosshairs axis order, to keep the crosshair
         colors in sync."""
 
         # update the colors of cross hairs in the main viewer.
@@ -587,57 +585,10 @@ class OrthoViewManager:
 
         self.crosshair_overlay.axis_order = axis_order_tuple
 
-        # update the dimension order in the orthoviews
-        if len(self.viewer.dims.order) > 3:
-            # fill up with extra dims
-            new_order = list(self.viewer.dims.order[:-3])
-        else:
-            new_order = []
-
-        remaining_dims = [
-            d for d in self.viewer.dims.order if d not in new_order
-        ]
-
-        # Only update orthoviews if there are at least 3 dimensions
-        if len(remaining_dims) >= 3 and self.right_widget is not None:
-            right_order = self.right_widget.order
-
-            new_right_order = new_order + [
-                remaining_dims[right_order[0]],
-                remaining_dims[right_order[1]],
-                remaining_dims[right_order[2]],
-            ]
-
-            self.right_widget.qt_viewer.dims.dims.order = new_right_order
-
-            # Update crosshairs for right widget by changing the model's axis_order
-            # The VispyCrosshairOverlay listens to these changes and will respond by
-            # updating the colors.
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                # use inverse numbering
-                ndim = len(new_right_order)
-                new_right_order = [r - ndim for r in new_right_order]
-                self.right_widget.vm_container.crosshair_overlay.axis_order = (
-                    tuple(new_right_order[-3:])
-                )
-
-            bottom_order = self.bottom_widget.order
-            new_bottom_order = new_order + [
-                remaining_dims[bottom_order[0]],
-                remaining_dims[bottom_order[1]],
-                remaining_dims[bottom_order[2]],
-            ]
-
-            self.bottom_widget.qt_viewer.dims.dims.order = new_bottom_order
-
-            # Update crosshairs for bottom widget by changing the model's axis_order
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                new_bottom_order = [r - ndim for r in new_bottom_order]
-                self.bottom_widget.vm_container.crosshair_overlay.axis_order = tuple(
-                    new_bottom_order[-3:]
-                )
+        # update the dimension order (and crosshair colors) in the orthoviews
+        for widget in (self.right_widget, self.bottom_widget):
+            if isinstance(widget, OrthoViewWidget):
+                widget._set_orth_views_dims_order()
 
     def set_splitter_sizes(
         self, side_fraction: float, bottom_fraction: float

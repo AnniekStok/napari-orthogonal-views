@@ -1,3 +1,7 @@
+import warnings
+from collections.abc import Callable
+
+from napari.components.camera import Camera
 from psygnal import Signal
 from qtpy.QtWidgets import (
     QCheckBox,
@@ -6,10 +10,15 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from scipy.spatial.transform import Rotation
 
 from napari_orthogonal_views.attribute_helpers import get_camera, get_grid
 from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
+)
+
+warnings.filterwarnings(
+    "ignore", message="Gimbal lock detected", module="napari._vispy.camera"
 )
 
 
@@ -207,91 +216,148 @@ class CameraWidget(QCheckBox):
     def set_camera_sync(self, state: bool) -> None:
         """Connect or disconnect camera zoom, center, and angle syncing on each of the ortho view widgets."""
 
+        def sync_camera(
+            w, source_camera: Camera, target_camera: Camera, rotation: Rotation
+        ) -> Callable:
+            """Match the target camera to the source camera for the zoom level, the center
+            (synced axes for 2D, all for 3D), and the viewing angles (3D only). In 3D all
+            views share the same camera orientation, but they use rotated angles.
+
+            Args:
+                source_camera (Camera): Camera of the ViewerModel emitting the signal
+                target_camera (Camera): Camera of the ViewerModel that should update
+                rotation (Rotation): camera rotation angles that should be applied to make the
+                right ortho view 90 degrees rotated along y, and the bottom orthoview
+                widget rotated 90 degrees around x.
+            """
+
+            def handler(event=None):
+                if w._block_camera:
+                    return
+                with w._camera_sync_blocked():
+
+                    # sync the zoom level
+                    target_camera.zoom = source_camera.zoom
+
+                    # set rotated angles, but only if all views are 3D renderings of the same dimensions
+                    shared_3d_order = (
+                        w.viewer.dims.ndisplay == 3
+                        and w.vm_container.viewer_model.dims.ndisplay == 3
+                        and tuple(w.viewer.dims.displayed)
+                        == tuple(w.vm_container.viewer_model.dims.displayed)
+                    )
+                    if (
+                        shared_3d_order
+                    ):  # all views are 3D and share the same axes, so get the current angles and rotate by 90 degrees along y or z depending on the view.
+                        source = Rotation.from_euler(
+                            "xyz", source_camera.angles, degrees=True
+                        )
+                        target = Rotation.from_euler(
+                            "xyz", target_camera.angles, degrees=True
+                        )
+                        new = rotation * source
+                        # skip if this is the same rotation already
+                        if (new * target.inv()).magnitude() > 1e-6:
+                            with warnings.catch_warnings():
+                                warnings.filterwarnings(
+                                    "ignore", message="Gimbal lock detected"
+                                )
+                                target_camera.angles = tuple(
+                                    new.as_euler("xyz", degrees=True)
+                                )
+
+                    # sync the center
+                    src_center = list(source_camera.center)
+                    tgt_center = list(target_camera.center)
+                    for ax in range(3) if shared_3d_order else w.sync_axes:
+                        tgt_center[ax] = src_center[ax]
+                    target_camera.center = tuple(tgt_center)
+
+            return handler
+
+        def reset_views(
+            w: OrthoViewWidget,
+            viewer_camera: Camera,
+            vm_camera: Camera,
+            rotation: Rotation,
+        ) -> Callable:
+            """Reset the main viewer and the orthogonal view together, whichever
+            of the two was reset, and line the orthogonal view up again."""
+
+            line_up = sync_camera(w, viewer_camera, vm_camera, rotation)
+
+            def handler(event):
+                if w._block_camera:
+                    return
+                with w._camera_sync_blocked():
+                    if event.source is not w.viewer:
+                        w.viewer.reset_view()
+                    w.vm_container.viewer_model.reset_view()
+                line_up()
+
+            return handler
+
         for widget in self.widgets:
 
             viewer_camera = get_camera(widget.viewer)
             vm_camera = get_camera(widget.vm_container.viewer_model)
 
+            # rotation from the main camera to this view's camera in 3D. Euler
+            # angles turn about the scene axes (scene x, y, z are data z, y, x)
+            if widget.order == (-1, -2, -3):
+                # right view: turn about y, to look along x
+                offset = Rotation.from_euler("y", -90, degrees=True)
+            elif widget.order == (-2, -3, -1):
+                # bottom view: turn about (data) x, to look along y
+                offset = Rotation.from_euler("z", 90, degrees=True)
+            else:
+                offset = Rotation.identity()
+
+            forward = sync_camera(widget, viewer_camera, vm_camera, offset)
+            reverse = sync_camera(
+                widget, vm_camera, viewer_camera, offset.inv()
+            )
+            reset = reset_views(widget, viewer_camera, vm_camera, offset)
+
             # immediately sync the current states
             if state == 2:
-                vm_camera.zoom = viewer_camera.zoom
-                vm_camera.angles = viewer_camera.angles
-                viewer_center = list(viewer_camera.center)
-                vm_center = list(vm_camera.center)
-                for axis in widget.sync_axes:
-                    vm_center[axis] = viewer_center[axis]
-                vm_camera.center = vm_center
+                forward()
 
-            # create handler to sync specific axes
-            def make_handler(w, source_camera, target_camera):
-                def handler(event=None):
-                    if w._block_center:
-                        return
-                    w._block_center = True
-                    try:
-                        src_center = list(source_camera.center)
-                        tgt_center = list(target_camera.center)
-                        for ax in w.sync_axes:
-                            # to ensure cross hairs are aligned
-                            tgt_center[ax] = src_center[ax]
-                        target_camera.center = tuple(tgt_center)
-                    finally:
-                        w._block_center = False
+            for name in ("zoom", "angles", "center"):
+                # Forward syncing of main viewer to ortho view
+                widget.sync_event(
+                    getattr(viewer_camera.events, name),
+                    forward,
+                    state,
+                    key_label=f"cam_{name}_viewer_to_vm",
+                )
+                # Reverse syncing from ortho view to main view
+                widget.sync_event(
+                    getattr(vm_camera.events, name),
+                    reverse,
+                    state,
+                    key_label=f"cam_{name}_vm_to_viewer",
+                )
 
-                return handler
-
-            # Forward syncing of main viewer to ortho view
-            # zoom
+            # switching to 3D changes the dims order of the orthogonal view, after
+            # which the cameras can be lined up again
             widget.sync_event(
-                viewer_camera.events.zoom,
-                lambda e, src=viewer_camera, dst=vm_camera: setattr(
-                    dst, "zoom", src.zoom
-                ),
+                widget.vm_container.viewer_model.dims.events.order,
+                forward,
                 state,
-                key_label="cam_zoom_viewer_to_vm",
-            )
-            # angles
-            widget.sync_event(
-                viewer_camera.events.angles,
-                lambda e, src=viewer_camera, dst=vm_camera: setattr(
-                    dst, "angles", src.angles
-                ),
-                state,
-                key_label="cam_angles_viewer_to_vm",
+                key_label="cam_layout_vm_order",
             )
 
-            # center (viewed axes only)
+            # resetting one view resets all
             widget.sync_event(
-                viewer_camera.events.center,
-                make_handler(widget, viewer_camera, vm_camera),
+                widget.viewer.events.reset_view,
+                reset,
                 state,
-                key_label=f"cam_center_viewer_to_vm_{id(widget)}",
+                key_label="cam_reset_viewer",
             )
-
-            # Reverse syncing from ortho view to main view
-            # zoom
             widget.sync_event(
-                vm_camera.events.zoom,
-                lambda e, src=vm_camera, dst=viewer_camera: setattr(
-                    dst, "zoom", src.zoom
-                ),
+                widget.vm_container.viewer_model.events.reset_view,
+                reset,
                 state,
-                key_label="cam_zoom_vm_to_viewer",
-            )
-            # angles
-            widget.sync_event(
-                vm_camera.events.angles,
-                lambda e, src=vm_camera, dst=viewer_camera: setattr(
-                    dst, "angles", src.angles
-                ),
-                state,
-                key_label="cam_angles_vm_to_viewer",
-            )
-
-            # center (viewed axes only)
-            widget.sync_event(
-                vm_camera.events.center,
-                make_handler(widget, vm_camera, viewer_camera),
-                state,
-                key_label=f"cam_center_vm_to_viewer_{id(widget)}",
+                key_label="cam_reset_vm",
             )

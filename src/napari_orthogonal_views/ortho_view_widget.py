@@ -1,4 +1,5 @@
 import contextlib
+import warnings
 from collections.abc import Callable, Iterable, Iterator
 from functools import partial
 from typing import Any
@@ -37,15 +38,12 @@ from napari_orthogonal_views.viewer_utils import (
 )
 
 
-def copy_layer(
-    layer: Layer, name: str = "", axis_order: list[int] | None = None
-) -> Layer:
+def copy_layer(layer: Layer, name: str = "") -> Layer:
     """Clone a napari layer from its data (shallow copy, both original layer and copied
     layer share the same underlying data)."""
 
     copied_layer = Layer.create(*layer.as_layer_data_tuple())
     copied_layer.metadata["viewer_name"] = name
-    copied_layer.metadata["axis_order"] = axis_order
 
     # connect to the same undo/redo history in the case of labels layers
     if isinstance(layer, Labels):
@@ -142,7 +140,7 @@ def get_property_names(
         return emitter_list
 
     # Skip specific properties that cannot sync because they are not shown on ortho views
-    skip_props = {"thumbnail", "name", "scale_factor", "plane", "metadata"}
+    skip_props = {"thumbnail", "name", "scale_factor"}
     if isinstance(obj, Layer):
         # A layer's own mode and visibility are synced by the layer_tool hook instead,
         # because assigning them has side effects (see sync_layer_tool). Only a layer's
@@ -238,7 +236,6 @@ class ViewerModelContainer:
         self.viewer_model = ViewerModel(title)
         set_axes_visible(self.viewer_model, True)
         self._block = False
-        self.order = order
         self.sync_filters = sync_filters or {}
 
         # Register per-layer-type behaviour.
@@ -546,7 +543,7 @@ class ViewerModelContainer:
         """Set the layers of the contained ViewerModel."""
 
         self.viewer_model.layers.insert(
-            index, self.copy_layer(orig_layer, self.title, self.order)
+            index, self.copy_layer(orig_layer, self.title)
         )
         copied_layer = self.viewer_model.layers[orig_layer.name]
 
@@ -642,7 +639,7 @@ class OrthoViewWidget(QWidget):
             sync_axes = [0]
         self.sync_axes = sync_axes
         self._grid_syncing = False
-        self._block_center = False
+        self._block_camera = False
         # create container to store viewer model in
         self.vm_container = ViewerModelContainer(
             title="orthogonal view",
@@ -688,7 +685,6 @@ class OrthoViewWidget(QWidget):
         )
 
         # Viewer events
-        self._connect(self.viewer.events.reset_view, self._reset_view)
         self._connect(
             self.viewer.dims.events.current_step, self._update_current_step
         )
@@ -704,7 +700,11 @@ class OrthoViewWidget(QWidget):
             self._sync_axis_labels,
         )  # reverse sync: renames made on this view's own sliders
 
-        # Adjust dimension order for orthogonal views
+        # Adjust dimension order for orthogonal views, also when switching 2D/3D
+        self._connect(
+            self.vm_container.viewer_model.dims.events.ndisplay,
+            self._set_orth_views_dims_order,
+        )
         self._set_orth_views_dims_order()
 
         # Position dims to where the main viewer is looking without syncing it back
@@ -733,20 +733,36 @@ class OrthoViewWidget(QWidget):
 
     def _set_orth_views_dims_order(self) -> None:
         """Set the order of the dims in the orthogonal views, using the axis order
-        attribute."""
+        attribute.
 
-        # TODO: allow the user to provide the dimension order.
-        order = list(self.viewer.dims.order)
+        In 2D, this rearranged order makes the view show a reflected plane, mirroring and
+        rotating the object.
+        In 3D, we want to show the same object but viewed from orthogonal angles, so we
+        should use the main viewer's order + camera angles, instead of the mirrored view.
+        """
 
-        if len(order) > 2:
-            # model axis order (e.g. xz view)
-            m_order = list(order)
-            m_order[-3:] = (
-                m_order[self.order[0]],
-                m_order[self.order[1]],
-                m_order[self.order[2]],
-            )
-            self.vm_container.viewer_model.dims.order = m_order
+        model = self.vm_container.viewer_model
+        if len(self.viewer.dims.order) > 2:
+
+            m_order = list(self.viewer.dims.order)
+            if model.dims.ndisplay == 2:
+                # use model 'reflected' axis order (e.g. xz view)
+                m_order = list(m_order)
+                m_order[-3:] = (
+                    m_order[self.order[0]],
+                    m_order[self.order[1]],
+                    m_order[self.order[2]],
+                )
+
+            model.dims.order = m_order
+
+            # keep the crosshair colors matched to the axes, in inverse numbering
+            ndim = len(m_order)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self.vm_container.crosshair_overlay.axis_order = tuple(
+                    d - ndim for d in m_order[-3:]
+                )
 
         self._sync_axis_labels()
 
@@ -785,11 +801,6 @@ class OrthoViewWidget(QWidget):
             return
 
         target.axis_labels = labels
-
-    def _reset_view(self) -> None:
-        """Propagate the reset view event"""
-
-        self.vm_container.viewer_model.reset_view()
 
     def _layer_selection_changed(self, event: Event) -> None:
         """Update of current active layers"""
@@ -858,7 +869,7 @@ class OrthoViewWidget(QWidget):
             if tuple(model.dims.point) == point:
                 continue
 
-            with self._center_sync_blocked():
+            with self._camera_sync_blocked():
                 # Set world coordinates - napari will convert to appropriate steps
                 # for this model's dims.range
                 model.dims.point = point
@@ -874,15 +885,15 @@ class OrthoViewWidget(QWidget):
                 camera.center = camera_center
 
     @contextlib.contextmanager
-    def _center_sync_blocked(self) -> Iterator[None]:
-        """Hold off the camera center syncing of CenterWidget while the centers are
-        being set."""
+    def _camera_sync_blocked(self) -> Iterator[None]:
+        """Hold off the camera syncing of CameraWidget while the camera is being
+        set."""
 
-        previous, self._block_center = self._block_center, True
+        previous, self._block_camera = self._block_camera, True
         try:
             yield
         finally:
-            self._block_center = previous
+            self._block_camera = previous
 
     def sync_event(
         self,
