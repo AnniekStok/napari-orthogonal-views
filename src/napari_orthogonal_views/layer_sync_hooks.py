@@ -47,7 +47,6 @@ from collections.abc import Callable
 from typing import Any
 
 from napari.layers import Labels, Layer, Points
-from napari.layers.utils.plane import Plane
 from napari.utils.events import Event
 
 _MISSING = object()
@@ -352,21 +351,15 @@ def sync_points_selection(
 
 
 def sync_clipping_plane_hook(orig_layer: Layer, copied_layer: Labels) -> None:
-    """Sync the (clipping) plane modifications between original layer and copied layer"""
+    """Sync the (clipping) plane modifications between original layer and copied layer.
 
-    def reorder(plane: Plane) -> dict:
-        """The plane's values in the axis order of the copied layer."""
-
-        axis_order = copied_layer.metadata.get("axis_order", [0, 1, 2])
-        return {
-            **plane.dict(),
-            "position": [plane.position[i] for i in axis_order],
-            "normal": [plane.normal[i] for i in axis_order],
-        }
+    Planes are only rendered in 3D, where the orthogonal views share the dims order of
+    the main viewer, so they are copied as they are.
+    """
 
     def sync_clipping_planes(event: Event | None = None) -> None:
         new_planes = [
-            reorder(plane) for plane in orig_layer.experimental_clipping_planes
+            plane.dict() for plane in orig_layer.experimental_clipping_planes
         ]
         copied_planes = copied_layer.experimental_clipping_planes
         if len(copied_planes) == len(new_planes):
@@ -377,30 +370,20 @@ def sync_clipping_plane_hook(orig_layer: Layer, copied_layer: Labels) -> None:
         else:
             copied_layer.experimental_clipping_planes = new_planes
 
-    def sync_plane(event: Event | None = None) -> None:
-        copied_layer.plane.update(reorder(orig_layer.plane))
-
-    # Check which plane/clipping plane attributes exist for this layer type
-    handlers = []
-    if hasattr(orig_layer, "experimental_clipping_planes"):
+    # Check if both layers in this pair have the clipping plane attribute
+    if hasattr(orig_layer, "experimental_clipping_planes") and hasattr(
+        copied_layer, "experimental_clipping_planes"
+    ):
         orig_layer.experimental_clipping_planes.events.connect(
             sync_clipping_planes
         )
         sync_clipping_planes()
-        handlers.append(
+        return [
             (
                 orig_layer.experimental_clipping_planes.events,
                 sync_clipping_planes,
             )
-        )
-    if hasattr(
-        orig_layer, "plane"
-    ):  # points don't have it, so we need to skip
-        orig_layer.plane.events.connect(sync_plane)
-        sync_plane()
-        handlers.append((orig_layer.plane.events, sync_plane))
-
-    return handlers
+        ]
 
 
 # Define built-in hooks
