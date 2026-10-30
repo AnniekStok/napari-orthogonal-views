@@ -32,6 +32,7 @@ from napari_orthogonal_views.layer_sync_hooks import (
     DEFAULT_LAYER_HOOKS,
     TOOL_PROPERTIES,
 )
+from napari_orthogonal_views.planes_overlay import PlanesOverlay
 from napari_orthogonal_views.viewer_utils import (
     activate_on_hover,
     register_canvas,
@@ -262,6 +263,10 @@ class ViewerModelContainer:
         set_scene_overlay(
             self.viewer_model, "crosshairs", self.crosshair_overlay
         )
+
+        # Add planes overlay
+        self.planes_overlay = PlanesOverlay(blending="translucent")
+        set_scene_overlay(self.viewer_model, "planes", self.planes_overlay)
 
     def _setup_property_sync(
         self,

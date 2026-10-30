@@ -38,6 +38,10 @@ from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
     hook_name,
 )
+from napari_orthogonal_views.planes_overlay import (
+    PlanesOverlay,
+    VispyPlanesOverlay,
+)
 from napari_orthogonal_views.screen_recorder_widget import ScreenRecorderWidget
 from napari_orthogonal_views.viewer_utils import (
     activate_on_hover,
@@ -47,6 +51,7 @@ from napari_orthogonal_views.viewer_utils import (
 from napari_orthogonal_views.widget_controls import MainControlsWidget
 
 overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
+overlay_to_visual[PlanesOverlay] = VispyPlanesOverlay
 
 
 def init_actions():
@@ -106,6 +111,10 @@ class OrthoViewManager:
             blending="translucent_no_depth", axis_order=(-3, -2, -1)
         )
         set_scene_overlay(self.viewer, "crosshairs", self.crosshair_overlay)
+
+        # Add planes overlay (3D only) to main viewer
+        self.planes_overlay = PlanesOverlay(blending="translucent_no_depth")
+        set_scene_overlay(self.viewer, "planes", self.planes_overlay)
 
         # make sure the viewer activates on hover, and that its canvas is a candidate
         # for shortcuts acting on whichever canvas the mouse is over
@@ -242,15 +251,6 @@ class OrthoViewManager:
         _apply()
         QTimer.singleShot(0, _apply)
 
-    def set_cross_hairs(self, state: bool = True) -> None:
-        """Activate/deactivate the checkbox to set the crosshairs."""
-
-        if not self.is_shown():
-            return
-        self.main_controls_widget.controls_widget.cross_widget.setChecked(
-            state
-        )
-
     def set_axes(self, state: bool = True) -> None:
         """Activate/deactivate the checkbox to set the axes visibility."""
 
@@ -263,6 +263,15 @@ class OrthoViewManager:
         state = state == 2
         set_axes_visible(self.viewer, state)
 
+    def set_cross_hairs(self, state: bool = True) -> None:
+        """Activate/deactivate the checkbox to set the crosshairs."""
+
+        if not self.is_shown():
+            return
+        self.main_controls_widget.controls_widget.cross_widget.setChecked(
+            state
+        )
+
     def show_cross_hairs(self, state: int) -> None:
         """Show or hide the crosshairs overlay on all viewers"""
 
@@ -274,6 +283,31 @@ class OrthoViewManager:
                 get_scene_overlay(
                     widget.vm_container.viewer_model, "crosshairs"
                 ).visible = state
+
+    def set_plane(self, axis: int, state: bool = True) -> None:
+        """Activate/deactivate the checkbox to show the plane normal to axis."""
+
+        if not self.is_shown():
+            return
+        self.main_controls_widget.controls_widget.planes_widget.checkboxes[
+            axis
+        ].setChecked(state)
+
+    def show_plane(self, axis: int, state: int) -> None:
+        """Show or hide the plane normal to axis on all viewers (3D rendering only)."""
+
+        viewers = [self.viewer] + [
+            widget.vm_container.viewer_model
+            for widget in (self.right_widget, self.bottom_widget)
+            if isinstance(widget, OrthoViewWidget)
+        ]
+        for viewer in viewers:
+            overlay = get_scene_overlay(viewer, "planes")
+            visible_planes = set(overlay.visible_planes) - {axis}
+            if state == 2:
+                visible_planes.add(axis)
+            overlay.visible_planes = tuple(sorted(visible_planes))
+            overlay.visible = len(visible_planes) > 0
 
     def set_camera_sync(self, state: bool = True) -> None:
         """Activate the camera syncing in the controls widget"""
@@ -451,6 +485,9 @@ class OrthoViewManager:
         )
         self.main_controls_widget.controls_widget.show_axes.stateChanged.connect(
             self.show_axes
+        )
+        self.main_controls_widget.controls_widget.planes_widget.plane_toggled.connect(
+            self.show_plane
         )
 
         # Add the screen recorder tab when showing orthoviews

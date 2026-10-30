@@ -5,6 +5,7 @@ from napari.components.camera import Camera
 from psygnal import Signal
 from qtpy.QtWidgets import (
     QCheckBox,
+    QHBoxLayout,
     QLabel,
     QSizePolicy,
     QVBoxLayout,
@@ -67,6 +68,11 @@ class MainControlsWidget(QWidget):
         if isinstance(self.controls_widget, ControlsWidget):
             self.controls_widget.cross_widget.setChecked(False)
             self.controls_widget.show_axes.setChecked(False)
+            for (
+                checkbox
+            ) in self.controls_widget.planes_widget.checkboxes.values():
+                checkbox.setChecked(False)
+            self.controls_widget.planes_widget.cleanup()
         old_widget = self.controls_widget
         self.controls_widget = QWidget()
         self.main_layout.replaceWidget(old_widget, self.controls_widget)
@@ -81,6 +87,7 @@ class ControlsWidget(QWidget):
         super().__init__()
 
         self.cross_widget = QCheckBox("Show cross hairs")
+        self.planes_widget = PlanesWidget(widgets=widgets)
         self.show_axes = QCheckBox("Show axes")
         self.show_axes.setChecked(True)
         self.camera_widget = CameraWidget(widgets=widgets)
@@ -88,6 +95,7 @@ class ControlsWidget(QWidget):
 
         layout = QVBoxLayout()
         layout.addWidget(self.cross_widget)
+        layout.addWidget(self.planes_widget)
         layout.addWidget(self.show_axes)
         layout.addWidget(self.camera_widget)
         layout.addWidget(self.display_mode_widget)
@@ -98,6 +106,101 @@ class ControlsWidget(QWidget):
         label.setFont(font)
         layout.addWidget(label)
         self.setLayout(layout)
+
+
+class PlanesWidget(QWidget):
+    """One checkbox per plane, for the last three axes of the dims order. A plane is
+    drawn in 3D views, and as a colored canvas border in the 2D view showing it.
+    """
+
+    plane_toggled = Signal(
+        int, int
+    )  # axis (negative numbering), checkbox state
+
+    def __init__(self, widgets: list[OrthoViewWidget]) -> None:
+        super().__init__()
+        self.setToolTip(
+            "Show the planes through the current point: as planes in 3D views, as "
+            "a colored border in 2D views"
+        )
+
+        # the main viewer dims decide which axes get a checkbox
+        self._dims = [widgets[0].viewer.dims] if widgets else []
+
+        # axes (negative numbering) with their plane switched on. Negative numbering
+        # stays the same when layers add or remove leading dims.
+        self._visible: set[int] = set()
+        self._axes: list[int] = []  # the axis of each checkbox slot
+        self.checkboxes: dict[int, QCheckBox] = {}  # axis -> checkbox
+
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        main_checkbox = QCheckBox("Show planes")
+        main_checkbox.stateChanged.connect(self._toggle_all)
+        layout.addWidget(main_checkbox)
+        self._slots = []
+        for i in range(3):
+            checkbox = QCheckBox()
+            checkbox.stateChanged.connect(
+                lambda state, i=i: self._on_toggled(i, state)
+            )
+            self._slots.append(checkbox)
+            layout.addWidget(checkbox)
+        layout.addStretch()
+        self.setLayout(layout)
+
+        if self._dims:
+            for event in ("order", "ndim", "axis_labels"):
+                getattr(self._dims[0].events, event).connect(self._update_axes)
+        self._update_axes()
+
+    def _update_axes(self, event=None) -> None:
+        """Assign the checkboxes to the last three axes of the dims order."""
+
+        if not self._dims:
+            return
+        dims = self._dims[0]
+        self._axes = [axis - dims.ndim for axis in dims.order[-3:]]
+        self.checkboxes = {}
+        for i, checkbox in enumerate(self._slots):
+            checkbox.setVisible(i < len(self._axes))
+            if i >= len(self._axes):
+                continue
+            axis = self._axes[i]
+            self.checkboxes[axis] = checkbox
+            checkbox.setText(str(dims.axis_labels[axis]))
+            checkbox.setToolTip(
+                f"Plane marking the position along axis {axis}"
+            )
+            # the planes overlays already know this state, so do not emit
+            checkbox.blockSignals(True)
+            checkbox.setChecked(axis in self._visible)
+            checkbox.blockSignals(False)
+
+    def _on_toggled(self, slot: int, state: int) -> None:
+        """Remember the state of the plane and emit it for the axis in this slot."""
+
+        axis = self._axes[slot]
+        if state == 2:
+            self._visible.add(axis)
+        else:
+            self._visible.discard(axis)
+        self.plane_toggled.emit(axis, state)
+
+    def _toggle_all(self, state: int) -> None:
+        """Check or uncheck all the plane checkboxes."""
+
+        for checkbox in self.checkboxes.values():
+            checkbox.setChecked(state == 2)
+
+    def cleanup(self) -> None:
+        """Disconnect from the viewers, before this widget is removed."""
+
+        if self._dims:
+            for event in ("order", "ndim", "axis_labels"):
+                getattr(self._dims[0].events, event).disconnect(
+                    self._update_axes
+                )
 
 
 class DisplayModeWidget(QCheckBox):

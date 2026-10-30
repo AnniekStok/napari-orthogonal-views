@@ -6,6 +6,20 @@ from vispy.scene import Line
 from vispy.scene.node import Node
 
 
+def current_position(viewer: ViewerModel) -> np.ndarray:
+    """Return the world position of the current dims step, for all dims."""
+
+    step_size = [dim_range.step for dim_range in viewer.dims.range]
+    return np.array(
+        [
+            pos * step
+            for pos, step in zip(
+                viewer.dims.current_step, step_size, strict=False
+            )
+        ]
+    )
+
+
 class Crosshairs(Line):
     _base_segments = (
         np.array(
@@ -36,6 +50,15 @@ class Crosshairs(Line):
         ]
     )
 
+    # rows in _base_colors per axis, indexed by the axis in negative numbering
+    _color_pairs = ((-1, -2), (-3, -4), (-5, -6), (-7, -8), (-9, -10))
+
+    @classmethod
+    def axis_color(cls, axis: int) -> np.ndarray:
+        """Return the color of an axis, given in negative numbering."""
+
+        return cls._base_colors[cls._color_pairs[axis][0]]
+
     def __init__(self, axis_order: tuple[int] = (-3, -2, -1)):
         axis_order = list(axis_order)
         axis_order[1], axis_order[2] = (
@@ -55,7 +78,7 @@ class Crosshairs(Line):
     def _reorder_colors(self) -> None:
         """Return colors permuted to match viewer axis order."""
 
-        pairs = [(-1, -2), (-3, -4), (-5, -6), (-7, -8), (-9, -10)]
+        pairs = self._color_pairs
         new_order = [
             i for pair in [pairs[i] for i in self.axis_order] for i in pair
         ]
@@ -104,6 +127,9 @@ class VispyCrosshairOverlay(ViewerOverlayMixin, VispySceneOverlay):
         )
         self.viewer = viewer
         self.viewer.dims.events.current_step.connect(self._move_crosshairs)
+        self.viewer.dims.events.ndisplay.connect(
+            self._move_crosshairs
+        )  # just to update the colors
         self.overlay = overlay
         self.overlay.events.axis_order.connect(self._on_axis_order_change)
         super().reset()  # reset to make sure the overlay is not visible too early
@@ -125,13 +151,7 @@ class VispyCrosshairOverlay(ViewerOverlayMixin, VispySceneOverlay):
     def _move_crosshairs(self) -> None:
         """Move the crosshairs to the current viewer step."""
 
-        step_size = [dim_range.step for dim_range in self.viewer.dims.range]
-        position = [
-            pos * step
-            for pos, step in zip(
-                self.viewer.dims.current_step, step_size, strict=False
-            )
-        ]
+        position = current_position(self.viewer)
 
         displayed = list(self.viewer.dims.displayed[::-1])
         not_displayed = list(self.viewer.dims.not_displayed[::-1])
@@ -141,4 +161,11 @@ class VispyCrosshairOverlay(ViewerOverlayMixin, VispySceneOverlay):
         if len(displayed) == 2:
             displayed = np.concatenate([displayed, [not_displayed[0]]])
 
-        self.node.set_position(np.array(position)[displayed])
+        if self.viewer.dims.ndisplay == 3:
+            self.node._colors = (
+                "white"  # neutral color in 3D to avoid color confusion
+            )
+        else:
+            self.node._colors = self.node._reorder_colors()
+
+        self.node.set_position(position[displayed])
