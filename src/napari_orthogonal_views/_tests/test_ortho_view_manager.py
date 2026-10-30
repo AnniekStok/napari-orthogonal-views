@@ -51,30 +51,26 @@ def test_sync_camera(make_napari_viewer, qtbot):
     qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
     assert isinstance(m.right_widget, OrthoViewWidget)
 
-    # Test zoom sync
-    m.set_zoom_sync(True)
+    # Test camera syncing
+    m.set_camera_sync(True)
     w = m.right_widget
     zoom_emitter = get_camera(m.viewer).events.zoom
+    center_emitter = get_camera(m.viewer).events.center
 
     # Check if any (emitter, handler) in _connections has this emitter
     assert any(em == zoom_emitter for em, _ in w._connections)
-
-    # Check if the connection is removed
-    m.set_zoom_sync(False)
-    assert not any(em == zoom_emitter for em, _ in w._connections)
-
-    # Test center sync
-    m.set_center_sync(True)
-    center_emitter = get_camera(m.viewer).events.center
     assert any(em == center_emitter for em, _ in w._connections)
-    m.set_center_sync(False)
+
+    # Check if the connections are removed
+    m.set_camera_sync(False)
+    assert not any(em == zoom_emitter for em, _ in w._connections)
     assert not any(em == center_emitter for em, _ in w._connections)
 
     m.cleanup()
 
 
-def test_sync_grid(make_napari_viewer, qtbot):
-    """Test syncing of grid settings between viewer and orthoviews."""
+def test_sync_display(make_napari_viewer, qtbot):
+    """Test syncing of grid nd ndisplay settings between viewer and orthoviews."""
 
     viewer = make_napari_viewer()
     m = _get_manager(viewer)
@@ -82,14 +78,16 @@ def test_sync_grid(make_napari_viewer, qtbot):
     qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
     assert isinstance(m.right_widget, OrthoViewWidget)
 
-    m.set_grid_sync(True)
+    m.set_display_mode_sync(True)
     w = m.right_widget
 
     grid = get_grid(m.viewer)
     grid_emitter = grid.events
+    ndisplay_emitter = viewer.dims.events.ndisplay
 
     # Check if any (emitter, handler) in _connections has this emitter
     assert any(em == grid_emitter for em, _ in w._connections)
+    assert any(em == ndisplay_emitter for em, _ in w._connections)
 
     # Check that grid enabling is synced
     grid.enabled = True
@@ -98,9 +96,14 @@ def test_sync_grid(make_napari_viewer, qtbot):
         timeout=1000,
     )
 
+    # Test syncing of the display mode
+    viewer.dims.ndisplay = 3
+    assert w.vm_container.viewer_model.dims.ndisplay == 3
+
     # Check if the connection is removed
-    m.set_grid_sync(False)
+    m.set_display_mode_sync(False)
     assert not any(em == grid_emitter for em, _ in w._connections)
+    assert not any(em == ndisplay_emitter for em, _ in w._connections)
 
     m.cleanup()
 

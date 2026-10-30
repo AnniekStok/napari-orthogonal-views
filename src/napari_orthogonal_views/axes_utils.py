@@ -48,4 +48,5 @@ def set_axes_visible(viewer: ViewerModel, visible: bool) -> None:
     axes = get_axes(viewer)
     if PINNED_AXES:
         axes.position = AXES_POSITION
+        axes.box = False  # no black box around the axes
     axes.visible = visible
