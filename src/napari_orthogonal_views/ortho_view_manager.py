@@ -28,6 +28,10 @@ from napari_orthogonal_views.attribute_helpers import (
     set_scene_overlay,
 )
 from napari_orthogonal_views.axes_utils import set_axes_visible
+from napari_orthogonal_views.boxes_overlay import (
+    BoxesOverlay,
+    VispyBoxesOverlay,
+)
 from napari_orthogonal_views.cross_hair_overlay import (
     CrosshairOverlay,
     VispyCrosshairOverlay,
@@ -53,6 +57,7 @@ from napari_orthogonal_views.widget_controls import MainControlsWidget
 
 overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
 overlay_to_visual[PlanesOverlay] = VispyPlanesOverlay
+overlay_to_visual[BoxesOverlay] = VispyBoxesOverlay
 
 
 def init_actions():
@@ -120,6 +125,10 @@ class OrthoViewManager:
         # Add planes overlay (3D only) to main viewer
         self.planes_overlay = PlanesOverlay(blending="translucent_no_depth")
         set_scene_overlay(self.viewer, "planes", self.planes_overlay)
+
+        # Add boxes overlay (3D only, Range mode of the orthoslices) to main viewer
+        self.boxes_overlay = BoxesOverlay(visible=True)
+        set_scene_overlay(self.viewer, "boxes", self.boxes_overlay)
 
         # make sure the viewer activates on hover, and that its canvas is a candidate
         # for shortcuts acting on whichever canvas the mouse is over
@@ -332,11 +341,11 @@ class OrthoViewManager:
         ]
         return [node for node in nodes if node is not None]
 
-    def set_plane_boxes(self, boxes: tuple) -> None:
-        """Draw the planes of the cropped axes as boxes, on all viewers (3D only)."""
+    def set_boxes(self, boxes: tuple) -> None:
+        """Draw a box per cropped axis, on all viewers (3D only)."""
 
         for viewer in self._viewer_models():
-            get_scene_overlay(viewer, "planes").boxes = boxes
+            get_scene_overlay(viewer, "boxes").boxes = boxes
 
     def show_plane(self, axis: int, state: int) -> None:
         """Show or hide the plane normal to axis on all viewers (3D rendering only)."""
@@ -530,11 +539,11 @@ class OrthoViewManager:
             self.show_plane
         )
 
-        # Add the orthoslices tab, its range boxes are drawn by the planes overlays
+        # Add the orthoslices tab, its range boxes are drawn by the boxes overlays
         self.orthoslice_widget = OrthosliceWidget(
             self._viewer_models(), self._volume_nodes
         )
-        self.orthoslice_widget.boxes_changed.connect(self.set_plane_boxes)
+        self.orthoslice_widget.boxes_changed.connect(self.set_boxes)
         self.controls_tab.addTab(self.orthoslice_widget, "Orthoslices")
 
         # Add the screen recorder tab when showing orthoviews

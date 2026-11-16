@@ -1,15 +1,16 @@
-"""Orthoslices and per-axis clipping ranges on a layer, in 3D.
-'Slice' mode replaces the clipping function of the layer's volume node with one that
-treats the clipping planes as pairs (one slab each) and draws the union of the slabs.
-The 'Range' mode keeps the regular intersection, which crops the volume to a box.
+"""Show orthoslices and per-axis clipping ranges on a 3D rendered layer.
 
-The settings are stored per layer in the metadata ('orthoslices'), so every layer
-remembers its own mode, planes and positions.
+'Full volume' shows the default full volume rendering of the layer.
+'Slice' shows a clipping plane pair per axis, with a range of a single plane (unlike the default napari plane view).
+In this mode the Union is drawn, so you can see the plane for each activated axis simultaneously.
+'Range' crops the volume according to all activated clipping plane pairs, so you see the intersection of these clipping ranges.
+The settings are stored per layer in the metadata ('orthoslices'), and are restored when switching between the different modes.
 """
 
 from collections.abc import Callable
 
 import numpy as np
+from napari._qt.qt_resources import QColoredSVGIcon
 from napari.components.viewer_model import ViewerModel
 from napari.layers import Layer
 from napari.layers.utils.plane import ClippingPlane
@@ -21,6 +22,7 @@ from qtpy.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QRadioButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -45,8 +47,6 @@ _UNION_TEMPLATE = """
     }}
 """
 
-# inside the slab when on the positive side of both planes, inside the union when
-# inside any slab
 _SLAB_TEMPLATE = """
         distance_from_clip = max(distance_from_clip, min(
             dot(loc_transf - $clipping_plane_pos{a}, $clipping_plane_norm{a}),
@@ -59,8 +59,6 @@ def _union_of_slabs_glsl(n_planes: int) -> str:
 
     if n_planes == 0:
         return _UNION_TEMPLATE.format(start="3.4e38", slabs="")
-    # every plane must appear in the shader. A list that is being filled can have an
-    # odd length for a moment, its last plane then clips on its own.
     slabs = "".join(
         _SLAB_TEMPLATE.format(a=i, b=min(i + 1, n_planes - 1))
         for i in range(0, n_planes, 2)
@@ -124,6 +122,7 @@ class OrthosliceWidget(QWidget):
         self._volume_nodes = volume_nodes  # nodes of a layer and of its copies
         self.layer = None
         self._axes: list[int] = []  # the 3D displayed axes, negative numbering
+        self._hidden_boxes: set[int] = set()  # axes whose box the user hid
 
         self.mode_group = QButtonGroup(self)
         self.mode_buttons: dict[str, QRadioButton] = {}
@@ -138,10 +137,12 @@ class OrthosliceWidget(QWidget):
         self.mode_buttons[VOLUME].setChecked(True)
         self.mode_group.buttonClicked.connect(self._on_input)
 
-        # one row per displayed axis: checkbox, slice slider and range slider
+        # one row per displayed axis: checkbox, slice slider, range slider and a
+        # button to show/hide the box of the range
         self.checkboxes, self.sliders, self.range_sliders = [], [], []
+        self.box_buttons: list[QToolButton] = []
         rows = QVBoxLayout()
-        for _ in range(3):
+        for i in range(3):
             checkbox = QCheckBox()
             checkbox.setMinimumWidth(40)
             checkbox.toggled.connect(self._on_input)
@@ -149,13 +150,22 @@ class OrthosliceWidget(QWidget):
             slider.valueChanged.connect(self._on_slider)
             range_slider = QLabeledRangeSlider(Qt.Horizontal)
             range_slider.valueChanged.connect(self._on_input)
+            box_button = QToolButton()
+            box_button.setCheckable(True)
+            box_button.setChecked(True)
+            box_button.setToolTip("Show or hide the box of this range")
+            box_button.toggled.connect(
+                lambda shown, i=i: self._on_box_button(i, shown)
+            )
+            self._set_box_icon(box_button)
             row = QHBoxLayout()
-            for widget in (checkbox, slider, range_slider):
+            for widget in (checkbox, slider, range_slider, box_button):
                 row.addWidget(widget, alignment=Qt.AlignmentFlag.AlignBottom)
             rows.addLayout(row)
             self.checkboxes.append(checkbox)
             self.sliders.append(slider)
             self.range_sliders.append(range_slider)
+            self.box_buttons.append(box_button)
         self._inputs = [
             *self.mode_buttons.values(),
             *self.checkboxes,
@@ -242,7 +252,32 @@ class OrthosliceWidget(QWidget):
                 widget.blockSignals(True)
                 widget.setRange(0, int(dims.nsteps[axis]) - 1)
                 widget.blockSignals(False)
+        for axis, box_button in zip(
+            self._axes, self.box_buttons, strict=False
+        ):
+            box_button.blockSignals(True)
+            box_button.setChecked(axis not in self._hidden_boxes)
+            box_button.blockSignals(False)
+            self._set_box_icon(box_button)
         self._load()
+
+    def _set_box_icon(self, box_button: QToolButton) -> None:
+        """An open eye while the box is shown, a crossed out eye while hidden."""
+
+        name = "visibility" if box_button.isChecked() else "visibility_off"
+        icon = QColoredSVGIcon.from_resources(name)
+        box_button.setIcon(icon.colored(theme=self.viewer.theme))
+
+    def _on_box_button(self, slot: int, shown: bool) -> None:
+        """Show or hide the box of the axis in this row."""
+
+        axis = self._axes[slot]
+        if shown:
+            self._hidden_boxes.discard(axis)
+        else:
+            self._hidden_boxes.add(axis)
+        self._set_box_icon(self.box_buttons[slot])
+        self._emit_boxes()
 
     def _mode(self) -> str:
         return self.mode_group.checkedButton().text()
@@ -274,17 +309,25 @@ class OrthosliceWidget(QWidget):
             widget.blockSignals(False)
 
         mode = self._mode()
-        for i, (checkbox, slider, range_slider) in enumerate(
-            zip(self.checkboxes, self.sliders, self.range_sliders, strict=True)
+        for i, (checkbox, slider, range_slider, box_button) in enumerate(
+            zip(
+                self.checkboxes,
+                self.sliders,
+                self.range_sliders,
+                self.box_buttons,
+                strict=True,
+            )
         ):
             used = i < len(self._axes)
             checkbox.setVisible(used and mode != VOLUME)
             slider.setVisible(used and mode == SLICE)
             range_slider.setVisible(used and mode == RANGE)
+            box_button.setVisible(used and mode == RANGE)
             checkbox.setEnabled(self.layer is not None)
             active = self.layer is not None and checkbox.isChecked()
             slider.setEnabled(active)
             range_slider.setEnabled(active)
+            box_button.setEnabled(active)
         self._emit_boxes()
 
     def _store(self) -> None:
@@ -373,13 +416,15 @@ class OrthosliceWidget(QWidget):
         return ranges
 
     def _emit_boxes(self) -> None:
-        """Tell the planes overlays which axes the active layer crops, in Range mode."""
+        """Tell the boxes overlays which axes the active layer crops in Range mode,
+        leaving out the boxes the user hid."""
 
         boxes = ()
         if self.layer is not None and layer_state(self.layer)["mode"] == RANGE:
             boxes = tuple(
                 (axis, *bounds)
                 for axis, bounds in self._ranges(self.layer).items()
+                if axis not in self._hidden_boxes
             )
         self.boxes_changed.emit(boxes)
 

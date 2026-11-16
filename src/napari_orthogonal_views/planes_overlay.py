@@ -16,7 +16,6 @@ class PlanesOverlay(SceneOverlay):
     """Model side representation of the planes overlay."""
 
     visible_planes: tuple[int, ...] = ()
-    boxes: tuple[tuple[int, float, float], ...] = ()
 
 
 class VispyPlanesOverlay(ViewerOverlayMixin, VispySceneOverlay):
@@ -34,14 +33,12 @@ class VispyPlanesOverlay(ViewerOverlayMixin, VispySceneOverlay):
 
         # colored plane in 3D
         node = Mesh()  # for the fill
-        self.boxes = Mesh(parent=node)
         self.outline = Line(
             connect="segments", parent=node
         )  # for the outlines
         super().__init__(
             node=node, viewer=viewer, overlay=overlay, parent=parent, **kwargs
         )
-        self.boxes.order = self.node.order
         self.outline.order = self.node.order
 
         self.viewer = viewer
@@ -61,7 +58,6 @@ class VispyPlanesOverlay(ViewerOverlayMixin, VispySceneOverlay):
         self.viewer.layers.events.inserted.connect(self._update_planes)
         self.viewer.layers.events.removed.connect(self._update_planes)
         self.overlay.events.visible_planes.connect(self._update_planes)
-        self.overlay.events.boxes.connect(self._update_planes)
 
         super().reset()
         self._update_planes()
@@ -124,7 +120,7 @@ class VispyPlanesOverlay(ViewerOverlayMixin, VispySceneOverlay):
         super().close()
 
     def _on_blending_change(self) -> None:
-        """Apply the overlay blending to the outlines and boxes as well as the fill."""
+        """Apply the overlay blending to the outlines as well as the fill."""
 
         super()._on_blending_change()
         self.node.set_gl_state(
@@ -132,9 +128,6 @@ class VispyPlanesOverlay(ViewerOverlayMixin, VispySceneOverlay):
         )
         self.outline.set_gl_state(
             **BLENDING_MODES[self.overlay.blending], depth_mask=True
-        )
-        self.boxes.set_gl_state(
-            **BLENDING_MODES[self.overlay.blending], depth_mask=False
         )
 
     def _plane_axes(self) -> list[tuple[int, int]]:
@@ -168,8 +161,7 @@ class VispyPlanesOverlay(ViewerOverlayMixin, VispySceneOverlay):
         extent = self.viewer.layers.extent.world[:, displayed]
         point = current_position(self.viewer)[displayed]
 
-        boxes = {axis: (low, high) for axis, low, high in self.overlay.boxes}
-        fills = {"planes": ([], [], []), "boxes": ([], [], [])}
+        vertices, faces, face_colors = [], [], []
         pos, colors = [], []
         for normal, axis in self._plane_axes():
             u, v = (i for i in range(3) if i != normal)
@@ -183,28 +175,16 @@ class VispyPlanesOverlay(ViewerOverlayMixin, VispySceneOverlay):
             fill_color = color.copy()
             fill_color[3] = 0.15  # plane alpha
 
-            # fill: the plane, or the plane extruded to a box over the cropped range
-            sides = [corners]
-            vertices, faces, face_colors = fills["planes"]
-            if axis in boxes:
-                vertices, faces, face_colors = fills["boxes"]
-                low, high = ([c.copy() for c in corners] for _ in range(2))
-                for c_low, c_high in zip(low, high, strict=True):
-                    c_low[normal], c_high[normal] = boxes[axis]
-                sides = [low, high] + [
-                    [low[k], low[(k + 1) % 4], high[(k + 1) % 4], high[k]]
-                    for k in range(4)
+            # fill: two triangles per plane, with low alpha
+            offset = len(vertices)
+            vertices.extend(corners)
+            faces.extend(
+                [
+                    [offset, offset + 1, offset + 2],
+                    [offset, offset + 2, offset + 3],
                 ]
-            for side in sides:
-                offset = len(vertices)
-                vertices.extend(side)
-                faces.extend(
-                    [
-                        [offset, offset + 1, offset + 2],
-                        [offset, offset + 2, offset + 3],
-                    ]
-                )
-                face_colors.extend([fill_color] * 2)
+            )
+            face_colors.extend([fill_color] * 2)
 
             # outline at the current point, opaque
             for k in range(4):
@@ -212,18 +192,11 @@ class VispyPlanesOverlay(ViewerOverlayMixin, VispySceneOverlay):
             colors.extend([color] * 8)  # one color per point
 
         # vispy expects (x, y, z), napari displayed order is (z, y, x)
-        for mesh, (vertices, faces, face_colors) in (
-            (self.node, fills["planes"]),
-            (self.boxes, fills["boxes"]),
-        ):
-            if vertices:
-                mesh.set_data(
-                    vertices=np.array(vertices)[:, ::-1],
-                    faces=np.array(faces),
-                    face_colors=np.array(face_colors),
-                )
-            else:
-                mesh.set_data()  # nothing to fill, but the outlines stay
+        self.node.set_data(
+            vertices=np.array(vertices)[:, ::-1],
+            faces=np.array(faces),
+            face_colors=np.array(face_colors),
+        )
         self.outline.set_data(
             pos=np.array(pos)[:, ::-1], color=np.array(colors), width=2
         )

@@ -27,6 +27,7 @@ from napari_orthogonal_views.axes_utils import (
     get_axes,
     set_axes_visible,
 )
+from napari_orthogonal_views.boxes_overlay import BoxesOverlay
 from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
 from napari_orthogonal_views.layer_sync_hooks import (
     DEFAULT_LAYER_HOOKS,
@@ -156,7 +157,6 @@ def get_property_names(
 
     # Collect signal-backed properties
     for event_name, _signal in _iter_event_signals(obj.events):
-
         if event_name in skip_props or event_name.startswith("_"):
             continue
 
@@ -268,6 +268,10 @@ class ViewerModelContainer:
         self.planes_overlay = PlanesOverlay(blending="translucent")
         set_scene_overlay(self.viewer_model, "planes", self.planes_overlay)
 
+        # Add boxes overlay
+        self.boxes_overlay = BoxesOverlay(visible=True)
+        set_scene_overlay(self.viewer_model, "boxes", self.boxes_overlay)
+
     def _setup_property_sync(
         self,
         source_obj: Any,
@@ -308,7 +312,6 @@ class ViewerModelContainer:
 
         # Forward sync from source -> target
         if forward:
-
             # initial sync (skip current_size because it triggers immediate updates on a
             # layer that is not ready yet)
             if prop_name != "current_size" and hasattr(target_obj, prop_name):
@@ -335,7 +338,6 @@ class ViewerModelContainer:
 
         # Reverse sync: target → source
         if reverse and hasattr(target_obj, "events"):
-
             signal = get_signal(target_obj, prop_name)
 
             if signal is not None and hasattr(signal, "connect"):
@@ -748,7 +750,6 @@ class OrthoViewWidget(QWidget):
 
         model = self.vm_container.viewer_model
         if len(self.viewer.dims.order) > 2:
-
             m_order = list(self.viewer.dims.order)
             if model.dims.ndisplay == 2:
                 # use model 'reflected' axis order (e.g. xz view)

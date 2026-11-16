@@ -14,6 +14,7 @@ from qtpy.QtWidgets import (
 from scipy.spatial.transform import Rotation
 
 from napari_orthogonal_views.attribute_helpers import get_camera, get_grid
+from napari_orthogonal_views.cross_hair_overlay import Crosshairs
 from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
 )
@@ -169,6 +170,8 @@ class PlanesWidget(QWidget):
             axis = self._axes[i]
             self.checkboxes[axis] = checkbox
             checkbox.setText(str(dims.axis_labels[axis]))
+            r, g, b, _ = (Crosshairs.axis_color(axis) * 255).astype(int)
+            checkbox.setStyleSheet(f"color: rgb({r}, {g}, {b});")
             checkbox.setToolTip(
                 f"Plane marking the position along axis {axis}"
             )
