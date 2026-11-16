@@ -10,9 +10,13 @@ from vispy.scene.node import Node
 
 from napari_orthogonal_views.cross_hair_overlay import Crosshairs
 
-# a box as 8 corners (0 = low, 1 = high per dimension) and 12 triangles: per side
-# the 4 corners on that side, in product order, form a quad of 2 triangles
-_CORNERS = list(product((0, 1), repeat=3))
+# Box definition: there are 8 corners, defined with 0=low, and 1= high per axis.
+# There are 6 sides (quads), front, back, top, bottom, left, right.
+# Meshes need triangles, so two triangles (faces) per quad.
+
+_CORNERS = list(
+    product((0, 1), repeat=3)
+)  # (0,1) for (low, high), repeat=3 because we have 3 axes
 _QUADS = [
     [i for i, corner in enumerate(_CORNERS) if corner[dim] == side]
     for dim in range(3)
