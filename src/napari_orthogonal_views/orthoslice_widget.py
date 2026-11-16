@@ -128,7 +128,6 @@ class OrthosliceWidget(QWidget):
         self.mode_group = QButtonGroup(self)
         self.mode_buttons: dict[str, QRadioButton] = {}
         mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel("Mode"))
         for mode, tooltip in MODE_TOOLTIPS.items():
             button = QRadioButton(mode)
             button.setToolTip(tooltip)
@@ -152,7 +151,7 @@ class OrthosliceWidget(QWidget):
             range_slider.valueChanged.connect(self._on_input)
             row = QHBoxLayout()
             for widget in (checkbox, slider, range_slider):
-                row.addWidget(widget)
+                row.addWidget(widget, alignment=Qt.AlignmentFlag.AlignBottom)
             rows.addLayout(row)
             self.checkboxes.append(checkbox)
             self.sliders.append(slider)
@@ -197,8 +196,6 @@ class OrthosliceWidget(QWidget):
 
         self._update_axes()
         self._on_active_layer()
-
-    # active layer and axes
 
     def _on_active_layer(self, event=None) -> None:
         """Show the settings of the active layer, if it can be clipped in 3D."""
@@ -247,8 +244,6 @@ class OrthosliceWidget(QWidget):
                 widget.blockSignals(False)
         self._load()
 
-    # per layer settings
-
     def _mode(self) -> str:
         return self.mode_group.checkedButton().text()
 
@@ -278,7 +273,6 @@ class OrthosliceWidget(QWidget):
         for widget in self._inputs:
             widget.blockSignals(False)
 
-        # show the rows of the mode, a slider only acts while its axis is checked
         mode = self._mode()
         for i, (checkbox, slider, range_slider) in enumerate(
             zip(self.checkboxes, self.sliders, self.range_sliders, strict=True)
@@ -302,19 +296,15 @@ class OrthosliceWidget(QWidget):
         for i, axis in enumerate(self._axes):
             axis_state = self._axis_state(self.layer, axis)
             axis_state["range"] = tuple(self.range_sliders[i].value())
-            # while switching mode the checkboxes still show the previous mode, the
-            # new mode restores its own (all on the first time it is used)
             if mode == previous and mode != VOLUME:
                 axis_state["on"][mode] = self.checkboxes[i].isChecked()
-
-    # user input
 
     def _on_input(self, value=None) -> None:
         if self.layer is None:
             return
         self._store()
         self.apply(self.layer)
-        self._load()  # show the rows of the mode
+        self._load()
 
     def _on_slider(self, value=None) -> None:
         """Move the current point, which moves the slices via _on_current_step."""
@@ -332,8 +322,6 @@ class OrthosliceWidget(QWidget):
             if state is not None and state["mode"] == SLICE:
                 self.apply(layer)
         self._load()
-
-    # applying to the layer
 
     def apply(self, layer: Layer) -> None:
         """Write one pair of clipping planes per checked axis to a layer."""
