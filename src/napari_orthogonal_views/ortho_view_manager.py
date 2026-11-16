@@ -38,6 +38,7 @@ from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
     hook_name,
 )
+from napari_orthogonal_views.orthoslice_widget import OrthosliceWidget
 from napari_orthogonal_views.planes_overlay import (
     PlanesOverlay,
     VispyPlanesOverlay,
@@ -92,6 +93,10 @@ class OrthoViewManager:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.main_window = viewer.window._qt_window
+            # the vispy visuals of the main viewer layers, for the orthoslices tab
+            self._layer_to_visual = (
+                viewer.window._qt_viewer.canvas.layer_to_visual
+            )
         self._central = self.main_window.centralWidget()
         self._container: QWidget | None = None
         self._splitter_handlers: list[tuple[QSplitter, object]] = []
@@ -293,15 +298,50 @@ class OrthoViewManager:
             axis
         ].setChecked(state)
 
-    def show_plane(self, axis: int, state: int) -> None:
-        """Show or hide the plane normal to axis on all viewers (3D rendering only)."""
-
-        viewers = [self.viewer] + [
-            widget.vm_container.viewer_model
+    def _ortho_widgets(self) -> list[OrthoViewWidget]:
+        return [
+            widget
             for widget in (self.right_widget, self.bottom_widget)
             if isinstance(widget, OrthoViewWidget)
         ]
-        for viewer in viewers:
+
+    def _viewer_models(self) -> list[ViewerModel]:
+        """The main viewer and the viewer models of the orthogonal views."""
+
+        return [self.viewer] + [
+            widget.vm_container.viewer_model
+            for widget in self._ortho_widgets()
+        ]
+
+    def _volume_nodes(self, layer: Layer) -> list:
+        """The vispy volume nodes of a main viewer layer and of its copies in the
+        orthogonal views (copies have the same name)."""
+
+        visuals = [self._layer_to_visual.get(layer)]
+        for widget in self._ortho_widgets():
+            layers = widget.vm_container.viewer_model.layers
+            if layer.name in layers:
+                visuals.append(
+                    widget.qt_viewer.canvas.layer_to_visual.get(
+                        layers[layer.name]
+                    )
+                )
+        nodes = [
+            getattr(getattr(visual, "_layer_node", None), "_volume_node", None)
+            for visual in visuals
+        ]
+        return [node for node in nodes if node is not None]
+
+    def set_plane_boxes(self, boxes: tuple) -> None:
+        """Draw the planes of the cropped axes as boxes, on all viewers (3D only)."""
+
+        for viewer in self._viewer_models():
+            get_scene_overlay(viewer, "planes").boxes = boxes
+
+    def show_plane(self, axis: int, state: int) -> None:
+        """Show or hide the plane normal to axis on all viewers (3D rendering only)."""
+
+        for viewer in self._viewer_models():
             overlay = get_scene_overlay(viewer, "planes")
             visible_planes = set(overlay.visible_planes) - {axis}
             if state == 2:
@@ -490,6 +530,13 @@ class OrthoViewManager:
             self.show_plane
         )
 
+        # Add the orthoslices tab, its range boxes are drawn by the planes overlays
+        self.orthoslice_widget = OrthosliceWidget(
+            self._viewer_models(), self._volume_nodes
+        )
+        self.orthoslice_widget.boxes_changed.connect(self.set_plane_boxes)
+        self.controls_tab.addTab(self.orthoslice_widget, "Orthoslices")
+
         # Add the screen recorder tab when showing orthoviews
         if self.controls_tab.indexOf(self.screen_recorder_widget) == -1:
             self.controls_tab.addTab(
@@ -560,6 +607,13 @@ class OrthoViewManager:
         self.h_splitter_bottom.replaceWidget(idx, new_bottom)
         self.bottom_widget = new_bottom
         old_bottom.deleteLater()
+
+        # Remove the orthoslices tab, restoring the clipping of the layers
+        self.orthoslice_widget.cleanup()
+        self.controls_tab.removeTab(
+            self.controls_tab.indexOf(self.orthoslice_widget)
+        )
+        self.orthoslice_widget.deleteLater()
 
         # Remove the screen recorder tab when hiding orthoviews
         tab_index = self.controls_tab.indexOf(self.screen_recorder_widget)
