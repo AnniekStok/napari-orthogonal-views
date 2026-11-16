@@ -31,7 +31,7 @@ class VispyPlanesOverlay(ViewerOverlayMixin, VispySceneOverlay):
         **kwargs,
     ) -> None:
 
-        # colored plane in 3D
+        # colored plane in 3D, consisting of an outline and a fill
         node = Mesh()  # for the fill
         self.outline = Line(
             connect="segments", parent=node
@@ -131,7 +131,7 @@ class VispyPlanesOverlay(ViewerOverlayMixin, VispySceneOverlay):
         )
 
     def _plane_axes(self) -> list[tuple[int, int]]:
-        """Return (displayed index, axis) for each displayed axis with its plane on."""
+        """Return (displayed index, axis) for each displayed axis whose plane is turned on"""
 
         ndim = self.viewer.dims.ndim
         return [
