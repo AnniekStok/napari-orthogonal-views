@@ -5,7 +5,6 @@ import pytest
 from napari.layers import Image, Labels, Points, Shapes
 from napari.utils.events import Event
 
-from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
 from napari_orthogonal_views.layer_sync_hooks import (
     DEFAULT_LAYER_HOOKS,
 )
@@ -17,6 +16,9 @@ from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
     ViewerModelContainer,
     get_property_names,
+)
+from napari_orthogonal_views.overlays.cross_hair_overlay import (
+    CrosshairOverlay,
 )
 
 

@@ -14,10 +14,10 @@ from qtpy.QtWidgets import (
 from scipy.spatial.transform import Rotation
 
 from napari_orthogonal_views.attribute_helpers import get_camera, get_grid
-from napari_orthogonal_views.cross_hair_overlay import Crosshairs
 from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
 )
+from napari_orthogonal_views.overlays.cross_hair_overlay import Crosshairs
 
 warnings.filterwarnings(
     "ignore", message="Gimbal lock detected", module="napari._vispy.camera"

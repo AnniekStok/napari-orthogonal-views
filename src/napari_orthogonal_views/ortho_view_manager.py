@@ -28,32 +28,34 @@ from napari_orthogonal_views.attribute_helpers import (
     set_scene_overlay,
 )
 from napari_orthogonal_views.axes_utils import set_axes_visible
-from napari_orthogonal_views.boxes_overlay import (
-    BoxesOverlay,
-    VispyBoxesOverlay,
+from napari_orthogonal_views.controls.orthoslice_widget import OrthosliceWidget
+from napari_orthogonal_views.controls.screen_recorder_widget import (
+    ScreenRecorderWidget,
 )
-from napari_orthogonal_views.cross_hair_overlay import (
-    CrosshairOverlay,
-    VispyCrosshairOverlay,
-)
+from napari_orthogonal_views.controls.widget_controls import MainControlsWidget
 from napari_orthogonal_views.layer_sync_hooks import DEFAULT_LAYER_HOOKS
 from napari_orthogonal_views.ortho_view_widget import (
     DEFAULT_COPY_LAYER,
     OrthoViewWidget,
     hook_name,
 )
-from napari_orthogonal_views.orthoslice_widget import OrthosliceWidget
-from napari_orthogonal_views.planes_overlay import (
+from napari_orthogonal_views.overlays.boxes_overlay import (
+    BoxesOverlay,
+    VispyBoxesOverlay,
+)
+from napari_orthogonal_views.overlays.cross_hair_overlay import (
+    CrosshairOverlay,
+    VispyCrosshairOverlay,
+)
+from napari_orthogonal_views.overlays.planes_overlay import (
     PlanesOverlay,
     VispyPlanesOverlay,
 )
-from napari_orthogonal_views.screen_recorder_widget import ScreenRecorderWidget
 from napari_orthogonal_views.viewer_utils import (
     activate_on_hover,
     center_cross_on_mouse,
     register_canvas,
 )
-from napari_orthogonal_views.widget_controls import MainControlsWidget
 
 overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
 overlay_to_visual[PlanesOverlay] = VispyPlanesOverlay

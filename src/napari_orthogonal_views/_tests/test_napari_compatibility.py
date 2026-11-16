@@ -71,7 +71,9 @@ def test_a_custom_scene_overlay_round_trips(model):
     """The crosshairs are registered this way, so it has to survive the 0.9 split of
     _overlays into scene and canvas overlays."""
 
-    from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
+    from napari_orthogonal_views.overlays.cross_hair_overlay import (
+        CrosshairOverlay,
+    )
 
     overlay = CrosshairOverlay(
         blending="translucent_no_depth", axis_order=(-3, -2, -1)

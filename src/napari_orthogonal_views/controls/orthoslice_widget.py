@@ -28,7 +28,7 @@ from qtpy.QtWidgets import (
 )
 from superqt import QLabeledRangeSlider, QLabeledSlider
 
-from napari_orthogonal_views.cross_hair_overlay import Crosshairs
+from napari_orthogonal_views.overlays.cross_hair_overlay import Crosshairs
 
 VOLUME, SLICE, RANGE = "Full volume", "Slice", "Range"
 MODE_TOOLTIPS = {

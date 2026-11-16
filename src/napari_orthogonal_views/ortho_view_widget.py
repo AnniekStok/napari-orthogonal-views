@@ -27,13 +27,15 @@ from napari_orthogonal_views.axes_utils import (
     get_axes,
     set_axes_visible,
 )
-from napari_orthogonal_views.boxes_overlay import BoxesOverlay
-from napari_orthogonal_views.cross_hair_overlay import CrosshairOverlay
 from napari_orthogonal_views.layer_sync_hooks import (
     DEFAULT_LAYER_HOOKS,
     TOOL_PROPERTIES,
 )
-from napari_orthogonal_views.planes_overlay import PlanesOverlay
+from napari_orthogonal_views.overlays.boxes_overlay import BoxesOverlay
+from napari_orthogonal_views.overlays.cross_hair_overlay import (
+    CrosshairOverlay,
+)
+from napari_orthogonal_views.overlays.planes_overlay import PlanesOverlay
 from napari_orthogonal_views.viewer_utils import (
     activate_on_hover,
     register_canvas,

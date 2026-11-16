@@ -6,7 +6,7 @@ from napari.components.viewer_model import ViewerModel
 from vispy.scene import Line, Mesh
 from vispy.scene.node import Node
 
-from napari_orthogonal_views.cross_hair_overlay import (
+from napari_orthogonal_views.overlays.cross_hair_overlay import (
     Crosshairs,
     current_position,
 )
