@@ -8,6 +8,7 @@ The settings are stored per layer in the metadata ('orthoslices'), and are resto
 """
 
 from collections.abc import Callable
+from logging import warning
 
 import numpy as np
 from napari._qt.qt_resources import QColoredSVGIcon
@@ -80,6 +81,11 @@ def set_slab_union(volume_node, union: bool) -> None:
     """Switch a vispy volume node between intersecting its clipping planes (default) and
     drawing the union of the slabs formed by pairs of planes."""
 
+    if not hasattr(volume_node, "_build_clipping_planes_glsl"):
+        warning(
+            "Cannot display the union of planes for this layer, the vispy node does not support it"
+        )
+        return
     is_union = "_build_clipping_planes_glsl" in volume_node.__dict__
     if union == is_union:
         return  # do not recompile shader if already in the 'union' mode.
