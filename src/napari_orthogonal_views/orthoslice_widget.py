@@ -1,8 +1,8 @@
 """Show orthoslices and per-axis clipping ranges on a 3D rendered layer.
 
 'Full volume' shows the default full volume rendering of the layer.
-'Slice' shows a clipping plane pair per axis, with a range of a single plane (unlike the default napari plane view).
-In this mode the Union is drawn, so you can see the plane for each activated axis simultaneously.
+'Slice' shows a clipping plane pair per axis, defining a single plane (unlike the default napari plane view).
+In this mode the Union is drawn, so you can see the plane for each activated axis simultaneously. This requires changing the vispy shader.
 'Range' crops the volume according to all activated clipping plane pairs, so you see the intersection of these clipping ranges.
 The settings are stored per layer in the metadata ('orthoslices'), and are restored when switching between the different modes.
 """
@@ -30,7 +30,6 @@ from superqt import QLabeledRangeSlider, QLabeledSlider
 
 from napari_orthogonal_views.cross_hair_overlay import Crosshairs
 
-METADATA_KEY = "orthoslices"
 VOLUME, SLICE, RANGE = "Full volume", "Slice", "Range"
 MODE_TOOLTIPS = {
     VOLUME: "Show the full volume of the active layer (no slicing)",
@@ -38,6 +37,12 @@ MODE_TOOLTIPS = {
     RANGE: "Crop the volume to a range per checked axis",
 }
 
+# Vispy trickery of the rendering, to enable showing the union of the clipping planes instead of the intersection when in 'slice' mode.
+# The default function takes the minimum of the distance to all planes, which is the intersection of the slabs.
+# It can be replaced by a customized function that takes the maximum of the minimums of consecutive pairs of planes, which is the union of the slabs.
+
+# modified version from vispy.visuals.volume. A volume is drawn by ray casting with sampling.
+# The function returns a value that is ≥0 if the sample is kept, and <0 if it should be skipped (sample is outside clipping range).
 _UNION_TEMPLATE = """
     float clip_planes(vec3 loc, vec3 vol_shape) {{
         vec3 loc_transf = $clip_transform(vec4(loc * vol_shape, 1)).xyz;
@@ -58,26 +63,33 @@ def _union_of_slabs_glsl(n_planes: int) -> str:
     """Clipping function drawing the union of slabs, from consecutive pairs of planes."""
 
     if n_planes == 0:
-        return _UNION_TEMPLATE.format(start="3.4e38", slabs="")
+        return _UNION_TEMPLATE.format(
+            start="3.4e38", slabs=""
+        )  # means clip nothing
+
     slabs = "".join(
         _SLAB_TEMPLATE.format(a=i, b=min(i + 1, n_planes - 1))
         for i in range(0, n_planes, 2)
     )
-    return _UNION_TEMPLATE.format(start="-3.4e38", slabs=slabs)
+    return _UNION_TEMPLATE.format(
+        start="-3.4e38", slabs=slabs
+    )  # start from nothing inside, then add the slabs
 
 
 def set_slab_union(volume_node, union: bool) -> None:
-    """Switch a vispy volume node between intersecting its clipping planes (vispy's
-    default) and drawing the union of the slabs formed by pairs of planes."""
+    """Switch a vispy volume node between intersecting its clipping planes (default) and
+    drawing the union of the slabs formed by pairs of planes."""
 
     is_union = "_build_clipping_planes_glsl" in volume_node.__dict__
     if union == is_union:
-        return
-    volume_node.unfreeze()
+        return  # do not recompile shader if already in the 'union' mode.
+    volume_node.unfreeze()  # unfreeze to allow changing the shader function
     if union:
         volume_node._build_clipping_planes_glsl = _union_of_slabs_glsl
     else:
-        del volume_node._build_clipping_planes_glsl
+        del (
+            volume_node._build_clipping_planes_glsl
+        )  # delete the custom function to revert to default
     volume_node.freeze()
     # rebuild the shader function with the current planes
     volume_node.clipping_planes = volume_node.clipping_planes
@@ -88,22 +100,24 @@ def layer_state(layer: Layer) -> dict:
     whether it is on in Slice and in Range mode, and its range, in dims steps. Slices
     always follow the current point."""
 
+    # default setting at startup will be volume mode without any plane clipping
     return layer.metadata.setdefault(
-        METADATA_KEY, {"mode": VOLUME, "planes": {}}
+        "orthoslices", {"mode": VOLUME, "planes": {}}
     )
 
 
 def axis_on(axis_state: dict, mode: str) -> bool:
-    """Whether an axis is on in a mode. Every axis starts on the first time a mode is
-    used, after that the mode remembers its own choice."""
+    """The state of the different axes is stored per mode. Return whether the axis is
+    activated for the given mode (not volume)."""
 
     return mode != VOLUME and axis_state["on"].get(mode, True)
 
 
 class OrthosliceWidget(QWidget):
-    """Tab with a mode and one checkbox and slider per displayed axis, clipping the
-    active layer to a single slice per axis (orthoslices) or to a range per axis (crop
-    box). Active while any of the views renders in 3D."""
+    """Controls for ortho slicing. The user can choose between full volume rendering,
+    slice views (union), and range views (clipping planes, intersection). For slice and
+    range views, each axis can be turned on individually. A box overlay is optional for
+    the range view."""
 
     # (axis, low, high) in world coordinates, per axis cropped by the active layer
     boxes_changed = Signal(tuple)
@@ -122,7 +136,7 @@ class OrthosliceWidget(QWidget):
         self._volume_nodes = volume_nodes  # nodes of a layer and of its copies
         self.layer = None
         self._axes: list[int] = []  # the 3D displayed axes, negative numbering
-        self._hidden_boxes: set[int] = set()  # axes whose box the user hid
+        self._hidden_boxes: set[int] = set()  # axes whose box is hidden
 
         self.mode_group = QButtonGroup(self)
         self.mode_buttons: dict[str, QRadioButton] = {}
@@ -135,7 +149,7 @@ class OrthosliceWidget(QWidget):
             mode_row.addWidget(button)
         mode_row.addStretch()
         self.mode_buttons[VOLUME].setChecked(True)
-        self.mode_group.buttonClicked.connect(self._on_input)
+        self.mode_group.buttonClicked.connect(self._store_and_apply)
 
         # one row per displayed axis: checkbox, slice slider, range slider and a
         # button to show/hide the box of the range
@@ -145,15 +159,17 @@ class OrthosliceWidget(QWidget):
         for i in range(3):
             checkbox = QCheckBox()
             checkbox.setMinimumWidth(40)
-            checkbox.toggled.connect(self._on_input)
+            checkbox.toggled.connect(self._store_and_apply)
             slider = QLabeledSlider(Qt.Horizontal)
             slider.valueChanged.connect(self._on_slider)
             range_slider = QLabeledRangeSlider(Qt.Horizontal)
-            range_slider.valueChanged.connect(self._on_input)
+            range_slider.valueChanged.connect(self._store_and_apply)
             box_button = QToolButton()
             box_button.setCheckable(True)
             box_button.setChecked(True)
-            box_button.setToolTip("Show or hide the box of this range")
+            box_button.setToolTip(
+                "Toggle visibility of the box for this range"
+            )
             box_button.toggled.connect(
                 lambda shown, i=i: self._on_box_button(i, shown)
             )
@@ -186,21 +202,46 @@ class OrthosliceWidget(QWidget):
         layout.addStretch()
 
         dims = self.viewer.dims
-        self._connections = [
-            *(
-                (getattr(dims.events, name), self._update_axes)
-                for name in ("order", "ndim", "axis_labels", "range")
-            ),
-            (dims.events.current_step, self._on_current_step),
-            (
-                self.viewer.layers.selection.events.active,
-                self._on_active_layer,
-            ),
-            *(
-                (v.dims.events.ndisplay, self._on_active_layer)
-                for v in viewers
-            ),
-        ]
+
+        # gather all connections related to the viewer and its dims, so they can be disconnected on cleanup.
+        self._connections = []
+
+        # dims events (order, ndim, axis labels, and range) should trigger axis updates
+        self._connections.extend(
+            [
+                *(
+                    (getattr(dims.events, name), self._update_axes)
+                    for name in ("order", "ndim", "axis_labels", "range")
+                )
+            ]
+        )
+
+        # current step updates should trigger the slice sliders and planes
+        self._connections.extend(
+            [(dims.events.current_step, self._on_current_step)]
+        )
+
+        # active layer changes should trigger the widget to show the new layer's settings
+        self._connections.extend(
+            [
+                (
+                    self.viewer.layers.selection.events.active,
+                    self._on_active_layer,
+                )
+            ]
+        )
+
+        # ndisplay changes in any of the viewers should enable/disable plane sliders.
+        self._connections.extend(
+            [
+                *(
+                    (v.dims.events.ndisplay, self._on_active_layer)
+                    for v in viewers
+                )
+            ]
+        )
+
+        # connect all handlers
         for emitter, handler in self._connections:
             emitter.connect(handler)
 
@@ -208,7 +249,7 @@ class OrthosliceWidget(QWidget):
         self._on_active_layer()
 
     def _on_active_layer(self, event=None) -> None:
-        """Show the settings of the active layer, if it can be clipped in 3D."""
+        """Show the settings of the active layer, if all conditions are met."""
 
         layer = self.viewer.layers.selection.active
         in_3d = any(viewer.dims.ndisplay == 3 for viewer in self._viewers)
@@ -234,7 +275,8 @@ class OrthosliceWidget(QWidget):
 
     def _update_axes(self, event=None) -> None:
         """Assign the rows to the last three axes of the dims order, which are the
-        displayed axes in 3D, in all views."""
+        displayed axes in 3D, in all views. This ensures that the widget displays the
+        correct labels and total span (world)."""
 
         dims = self.viewer.dims
         self._axes = [axis - dims.ndim for axis in dims.order[-3:]]
@@ -280,25 +322,30 @@ class OrthosliceWidget(QWidget):
         self._emit_boxes()
 
     def _mode(self) -> str:
+        """Return the selected button text (Full volume, Slice, Range)."""
         return self.mode_group.checkedButton().text()
 
     def _axis_state(self, layer: Layer, axis: int) -> dict:
         """The settings of one axis of a layer: on per mode (unset until the mode is
         first used), and its range, starting at the full range."""
 
-        top = int(self.viewer.dims.nsteps[axis]) - 1
+        top = (
+            int(self.viewer.dims.nsteps[axis]) - 1
+        )  # full range is used if not set yet
         return layer_state(layer)["planes"].setdefault(
             axis, {"on": {}, "range": (0, top)}
         )
 
     def _load(self) -> None:
-        """Show the settings of the active layer in the widgets, without applying."""
+        """Show the settings of the active layer in the widgets (without applying, the layer is already configured)."""
 
         for widget in self._inputs:
             widget.blockSignals(True)
         if self.layer is not None:
             mode = layer_state(self.layer)["mode"]
-            self.mode_buttons[mode].setChecked(True)
+            self.mode_buttons[mode].setChecked(
+                True
+            )  # make sure that button state corresponds to layer state
             for i, axis in enumerate(self._axes):
                 axis_state = self._axis_state(self.layer, axis)
                 self.checkboxes[i].setChecked(axis_on(axis_state, mode))
@@ -342,7 +389,9 @@ class OrthosliceWidget(QWidget):
             if mode == previous and mode != VOLUME:
                 axis_state["on"][mode] = self.checkboxes[i].isChecked()
 
-    def _on_input(self, value=None) -> None:
+    def _store_and_apply(self, value=None) -> None:
+        """Store the widget settings to the active layer, and apply the changes to the layer, and ensure the settings are correctly displayed in the widgets."""
+
         if self.layer is None:
             return
         self._store()
@@ -350,7 +399,7 @@ class OrthosliceWidget(QWidget):
         self._load()
 
     def _on_slider(self, value=None) -> None:
-        """Move the current point, which moves the slices via _on_current_step."""
+        """Read the values from the current sliders, and use it to move the current point via viewer.dims.current_step"""
 
         step = list(self.viewer.dims.current_step)
         for axis, slider in zip(self._axes, self.sliders, strict=False):
@@ -361,7 +410,7 @@ class OrthosliceWidget(QWidget):
         """Move the slices of every layer in Slice mode to the current point."""
 
         for layer in self.viewer.layers:
-            state = layer.metadata.get(METADATA_KEY)
+            state = layer.metadata.get("orthoslices")
             if state is not None and state["mode"] == SLICE:
                 self.apply(layer)
         self._load()
@@ -371,7 +420,7 @@ class OrthosliceWidget(QWidget):
 
         slice_mode = layer_state(layer)["mode"] == SLICE
         for node in self._volume_nodes(layer):
-            set_slab_union(node, slice_mode)
+            set_slab_union(node, slice_mode)  # turn union mode on or off.
 
         # the plane vectors follow the 3D displayed axes, in world units
         planes = []
@@ -391,23 +440,31 @@ class OrthosliceWidget(QWidget):
             # plane depiction only samples a single plane, the slabs need the volume
             layer.depiction = "volume"
 
-        layer.experimental_clipping_planes = planes
+        layer.experimental_clipping_planes = planes  # an empty list (volume, or all axes turned off, means no clipping)
 
     def _ranges(self, layer: Layer) -> dict[int, tuple[float, float]]:
         """World range per checked axis of a layer. A slice extends half a step to
-        either side, so it is one slice thick."""
+        either side, so it is one slice thick. Since all dims are synced, the slice position
+        can be read directly from the viewer.dims.current_step. The range is read from the
+        range sliders."""
 
         dims = self.viewer.dims
         mode = layer_state(layer)["mode"]
         ranges = {}
         for axis in self._axes:
             axis_state = self._axis_state(layer, axis)
-            if not axis_on(axis_state, mode):
+            if not axis_on(
+                axis_state, mode
+            ):  # volume mode is skipped, as well as any axis that is turned off
                 continue
             if mode == SLICE:
-                low = high = dims.current_step[axis]
+                low = high = dims.current_step[
+                    axis
+                ]  # low and high are the same, read from current_step
             else:
-                low, high = axis_state["range"]
+                low, high = axis_state[
+                    "range"
+                ]  # read the axis state for the current layer.
             start, _, step = dims.range[axis]
             ranges[axis] = (
                 start + (low - 0.5) * step,
@@ -434,7 +491,7 @@ class OrthosliceWidget(QWidget):
         for emitter, handler in self._connections:
             emitter.disconnect(handler)
         for layer in self.viewer.layers:
-            if layer.metadata.pop(METADATA_KEY, None) is None:
+            if layer.metadata.pop("orthoslices", None) is None:
                 continue
             for node in self._volume_nodes(layer):
                 set_slab_union(node, False)
