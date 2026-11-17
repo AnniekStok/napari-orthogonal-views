@@ -31,7 +31,6 @@ from napari_orthogonal_views.layer_sync_hooks import (
     DEFAULT_LAYER_HOOKS,
     TOOL_PROPERTIES,
 )
-from napari_orthogonal_views.overlays.boxes_overlay import BoxesOverlay
 from napari_orthogonal_views.overlays.cross_hair_overlay import (
     CrosshairOverlay,
 )
@@ -269,10 +268,6 @@ class ViewerModelContainer:
         # Add planes overlay
         self.planes_overlay = PlanesOverlay(blending="translucent")
         set_scene_overlay(self.viewer_model, "planes", self.planes_overlay)
-
-        # Add boxes overlay
-        self.boxes_overlay = BoxesOverlay(visible=True)
-        set_scene_overlay(self.viewer_model, "boxes", self.boxes_overlay)
 
     def _setup_property_sync(
         self,

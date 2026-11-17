@@ -11,11 +11,9 @@ from collections.abc import Callable
 from logging import warning
 
 import numpy as np
-from napari._qt.qt_resources import QColoredSVGIcon
 from napari.components.viewer_model import ViewerModel
 from napari.layers import Layer
 from napari.layers.utils.plane import ClippingPlane
-from psygnal import Signal
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
     QButtonGroup,
@@ -23,7 +21,6 @@ from qtpy.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QRadioButton,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -125,9 +122,6 @@ class OrthosliceWidget(QWidget):
     range views, each axis can be turned on individually. A box overlay is optional for
     the range view."""
 
-    # (axis, low, high) in world coordinates, per axis cropped by the active layer
-    boxes_changed = Signal(tuple)
-
     def __init__(
         self,
         viewers: list[ViewerModel],
@@ -142,7 +136,6 @@ class OrthosliceWidget(QWidget):
         self._volume_nodes = volume_nodes  # nodes of a layer and of its copies
         self.layer = None
         self._axes: list[int] = []  # the 3D displayed axes, negative numbering
-        self._hidden_boxes: set[int] = set()  # axes whose box is hidden
 
         self.mode_group = QButtonGroup(self)
         self.mode_buttons: dict[str, QRadioButton] = {}
@@ -160,9 +153,8 @@ class OrthosliceWidget(QWidget):
         # one row per displayed axis: checkbox, slice slider, range slider and a
         # button to show/hide the box of the range
         self.checkboxes, self.sliders, self.range_sliders = [], [], []
-        self.box_buttons: list[QToolButton] = []
         rows = QVBoxLayout()
-        for i in range(3):
+        for _ in range(3):
             checkbox = QCheckBox()
             checkbox.setMinimumWidth(40)
             checkbox.toggled.connect(self._store_and_apply)
@@ -170,24 +162,14 @@ class OrthosliceWidget(QWidget):
             slider.valueChanged.connect(self._on_slider)
             range_slider = QLabeledRangeSlider(Qt.Horizontal)
             range_slider.valueChanged.connect(self._store_and_apply)
-            box_button = QToolButton()
-            box_button.setCheckable(True)
-            box_button.setChecked(True)
-            box_button.setToolTip(
-                "Toggle visibility of the box for this range"
-            )
-            box_button.toggled.connect(
-                lambda shown, i=i: self._on_box_button(i, shown)
-            )
-            self._set_box_icon(box_button)
+
             row = QHBoxLayout()
-            for widget in (checkbox, slider, range_slider, box_button):
+            for widget in (checkbox, slider, range_slider):
                 row.addWidget(widget, alignment=Qt.AlignmentFlag.AlignBottom)
             rows.addLayout(row)
             self.checkboxes.append(checkbox)
             self.sliders.append(slider)
             self.range_sliders.append(range_slider)
-            self.box_buttons.append(box_button)
         self._inputs = [
             *self.mode_buttons.values(),
             *self.checkboxes,
@@ -300,32 +282,7 @@ class OrthosliceWidget(QWidget):
                 widget.blockSignals(True)
                 widget.setRange(0, int(dims.nsteps[axis]) - 1)
                 widget.blockSignals(False)
-        for axis, box_button in zip(
-            self._axes, self.box_buttons, strict=False
-        ):
-            box_button.blockSignals(True)
-            box_button.setChecked(axis not in self._hidden_boxes)
-            box_button.blockSignals(False)
-            self._set_box_icon(box_button)
         self._load()
-
-    def _set_box_icon(self, box_button: QToolButton) -> None:
-        """An open eye while the box is shown, a crossed out eye while hidden."""
-
-        name = "visibility" if box_button.isChecked() else "visibility_off"
-        icon = QColoredSVGIcon.from_resources(name)
-        box_button.setIcon(icon.colored(theme=self.viewer.theme))
-
-    def _on_box_button(self, slot: int, shown: bool) -> None:
-        """Show or hide the box of the axis in this row."""
-
-        axis = self._axes[slot]
-        if shown:
-            self._hidden_boxes.discard(axis)
-        else:
-            self._hidden_boxes.add(axis)
-        self._set_box_icon(self.box_buttons[slot])
-        self._emit_boxes()
 
     def _mode(self) -> str:
         """Return the selected button text (Full volume, Slice, Range)."""
@@ -362,12 +319,11 @@ class OrthosliceWidget(QWidget):
             widget.blockSignals(False)
 
         mode = self._mode()
-        for i, (checkbox, slider, range_slider, box_button) in enumerate(
+        for i, (checkbox, slider, range_slider) in enumerate(
             zip(
                 self.checkboxes,
                 self.sliders,
                 self.range_sliders,
-                self.box_buttons,
                 strict=True,
             )
         ):
@@ -375,13 +331,10 @@ class OrthosliceWidget(QWidget):
             checkbox.setVisible(used and mode != VOLUME)
             slider.setVisible(used and mode == SLICE)
             range_slider.setVisible(used and mode == RANGE)
-            box_button.setVisible(used and mode == RANGE)
             checkbox.setEnabled(self.layer is not None)
             active = self.layer is not None and checkbox.isChecked()
             slider.setEnabled(active)
             range_slider.setEnabled(active)
-            box_button.setEnabled(active)
-        self._emit_boxes()
 
     def _store(self) -> None:
         """Write the widgets to the settings of the active layer."""
@@ -477,19 +430,6 @@ class OrthosliceWidget(QWidget):
                 start + (high + 0.5) * step,
             )
         return ranges
-
-    def _emit_boxes(self) -> None:
-        """Tell the boxes overlays which axes the active layer crops in Range mode,
-        leaving out the boxes the user hid."""
-
-        boxes = ()
-        if self.layer is not None and layer_state(self.layer)["mode"] == RANGE:
-            boxes = tuple(
-                (axis, *bounds)
-                for axis, bounds in self._ranges(self.layer).items()
-                if axis not in self._hidden_boxes
-            )
-        self.boxes_changed.emit(boxes)
 
     def cleanup(self) -> None:
         """Disconnect, and restore the clipping of the layers this widget changed."""
