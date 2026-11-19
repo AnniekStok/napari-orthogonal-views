@@ -315,9 +315,11 @@ class OrthoViewManager:
             for widget in self._ortho_widgets()
         ]
 
-    def _volume_nodes(self, layer: Layer) -> list:
-        """The vispy volume nodes of a main viewer layer and of its copies in the
-        orthogonal views (copies have the same name)."""
+    def _clip_nodes(self, layer: Layer) -> list[tuple[object, object]]:
+        """The vispy nodes that clip a main viewer layer and its copies in the
+        orthogonal views (copies have the same name), with their napari vispy layers:
+        the volume nodes of images and labels, or the nodes with a clipping filter
+        (e.g. points, surfaces)."""
 
         visuals = [self._layer_to_visual.get(layer)]
         for widget in self._ortho_widgets():
@@ -329,10 +331,20 @@ class OrthoViewManager:
                     )
                 )
         nodes = [
-            getattr(getattr(visual, "_layer_node", None), "_volume_node", None)
+            (
+                visual,
+                getattr(
+                    getattr(visual, "_layer_node", None), "_volume_node", None
+                )
+                or getattr(visual, "node", None),
+            )
             for visual in visuals
         ]
-        return [node for node in nodes if node is not None]
+        return [
+            (visual, node)
+            for visual, node in nodes
+            if hasattr(node, "clipping_planes")
+        ]
 
     def show_plane(self, axis: int, state: int) -> None:
         """Show or hide the plane normal to axis on all viewers (3D rendering only)."""
@@ -526,9 +538,9 @@ class OrthoViewManager:
             self.show_plane
         )
 
-        # Add the orthoslices tab, its range boxes are drawn by the boxes overlays
+        # Add the orthoslices tab
         self.orthoslice_widget = OrthosliceWidget(
-            self._viewer_models(), self._volume_nodes
+            self._viewer_models(), self._clip_nodes
         )
         self.controls_tab.addTab(self.orthoslice_widget, "Orthoslices")
 
