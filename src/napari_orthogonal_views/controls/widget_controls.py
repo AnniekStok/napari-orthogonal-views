@@ -258,7 +258,6 @@ class DisplayModeWidget(QCheckBox):
         """Enable/disable display syncing across all widgets."""
 
         for widget in self.widgets:
-
             # push initial state when enabling
             if state == 2:
                 self._copy_grid(
@@ -281,8 +280,8 @@ class DisplayModeWidget(QCheckBox):
             # sync display
             widget.sync_event(
                 widget.viewer.dims.events.ndisplay,
-                lambda e, src=widget.viewer.dims, dst=widget.vm_container.viewer_model.dims: setattr(
-                    dst, "ndisplay", src.ndisplay
+                lambda e, src=widget.viewer.dims, dst=widget.vm_container.viewer_model.dims: (
+                    setattr(dst, "ndisplay", src.ndisplay)
                 ),
                 state,
                 key_label="ndisplay_viewer_to_vm",
@@ -300,8 +299,8 @@ class DisplayModeWidget(QCheckBox):
             # sync display
             widget.sync_event(
                 widget.vm_container.viewer_model.dims.events.ndisplay,
-                lambda e, src=widget.vm_container.viewer_model.dims, dst=widget.viewer.dims: setattr(
-                    dst, "ndisplay", src.ndisplay
+                lambda e, src=widget.vm_container.viewer_model.dims, dst=widget.viewer.dims: (
+                    setattr(dst, "ndisplay", src.ndisplay)
                 ),
                 state,
                 key_label="ndisplay_vm_to_viewer",
@@ -341,7 +340,6 @@ class CameraWidget(QCheckBox):
                 if w._block_camera:
                     return
                 with w._camera_sync_blocked():
-
                     # sync the zoom level
                     target_camera.zoom = source_camera.zoom
 
@@ -404,7 +402,6 @@ class CameraWidget(QCheckBox):
             return handler
 
         for widget in self.widgets:
-
             viewer_camera = get_camera(widget.viewer)
             vm_camera = get_camera(widget.vm_container.viewer_model)
 
