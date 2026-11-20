@@ -15,7 +15,7 @@ A napari plugin for dynamically displaying orthogonal views and syncing events b
 
 This [napari] plugin was generated with [copier] using the [napari-plugin-template].
 
-![orthoviews](https://github.com/user-attachments/assets/9d1ea326-866d-4af7-9ea6-8e56046cf6f2)
+<img width="1000" height="631" alt="orthoviews" src="https://github.com/user-attachments/assets/682a7e24-c668-4cd3-8ad7-444e1e902ee3" />
 
 <!--
 Don't miss the full getting started guide to set up your new package:
@@ -42,7 +42,23 @@ This plugin is not discoverable as a widget, but commands are available in Views
   - Remove Orthogonal Views
 
 Once shown, it can also be popped up or collapsed using the checkbox in the bottom right corner 'Show orthogonal views'.
-Alternatively, you can show the orthogonal views via the console:
+The size of the orthogonal view windows can be adjusted by clicking and dragging the small dot in between the views, optionally one or two views can be hidden entirely. 
+Pressing `T` on the keyboard will center all views to the current mouse location.
+
+By default, all events (including label editing such as painting) are synced across all views. The different views share the same underlying data array and undo/redo history.
+
+### Extra controls and options
+The checkboxes in the bottom right corner can be used to toggle the crosshair overlay and axis labels, and to switch camera and display syncing on and off. With camera syncing on, the camera zoom, center, and angles (in 3D only) are synced. Angle syncing ensures that the orthogonal canvases display 90 degree rotations of the views. Turning on display mode syncing ensures that all canvases sync the 2D/3D display, grid mode, and reset function.
+Turning on the crosshair display creates different overlays depending on the viewed dimensions and the rendering type (2D or 3D). In 2D, the axis positions are indicated as crosshairs representing a plane normal to that axis. The position of the line thus indicates the position along its corresponding axis (not the axis itself). Moving the slider of the right ortho view (which slices along x) moves the cyan crosshair horizontally (along x). The non-displayed axis (the one that is moved by the slider) is represented as a colored border around the canvas. In 3D, the 1D crosshairs become 2D planes.
+
+The 'Orthoslicing' tab offers plane and range slicing in 3D. In 'slice' mode, a plane is rendered for each activated axis, according to its current position. In 'range' mode, you can set the bounds of each pair of clipping planes to 'crop' the 3D view. Orthoslicing is considered an experimental feature of the plugin.
+
+The 'Screen recording' tab offers a quick way to save a stitched image of the viewer with its orthogonal views. It is also possible to slide along a given axis and record a movie that is saved as a .avi file.
+
+<img width="1000" height="631" alt="orthoslicing" src="https://github.com/user-attachments/assets/7bca8534-ef5c-4175-b51a-d6fd189e3f80" />
+
+### Advanced usage
+You can access the orthogonal views via the console:
 
 ```
 from napari_orthogonal_views.ortho_view_manager import show_orthogonal_views
@@ -58,12 +74,7 @@ m.is_shown()
 Out[6]: True
 ```
 
-The size of the orthogonal view windows can be adjusted by clicking and dragging the small dot in between the views, optionally one or two views can be hidden entirely. The checkboxes in the bottom right corner can be used to show the crosshair overlay or for more control over camera zoom and axis center syncing.
-Pressing `T` on the keyboard will center all views to the current mouse location.
-
-By default, all events (including label editing such as painting) are synced across all views. The different views share the same underlying data array and undo/redo history.
-
-## Syncing properties
+#### Syncing properties
 By default, all layer properties should be synced between the layer on the main viewer and the orthoviews. However, it is possible to have more finegrained control over the synced properties via the `set_sync_filters` function, as long as it is specified *before* the orthogonal views are activated.
 
 For example, to disable syncing of all properties on Tracks layers and specifically the `contour` property on Labels layers:
@@ -86,7 +97,7 @@ m.set_sync_filters(sync_filters)
 ```
 Then add 3D data (e.g. File > Open Sample > napari builtins > Balls (3D)). Activate the labels layer and change the contour value. You should see that the contour property is not synced from main viewer to orthoviews now.
 
-## Layer hooks
+#### Layer hooks
 Some syncing cannot be expressed as a property copy: painting on a Labels layer, undo/redo, and the point selection each need their own wiring, because they do not emit an event that the property syncing can pick up. These are implemented as *layer hooks* in `layer_sync_hooks.py`, and are installed automatically.
 
 A hook is called once per layer, per orthogonal view:
@@ -101,7 +112,7 @@ def my_hook(orig_layer, copied_layer):
 
 Layers can be removed while the orthogonal views stay open, so a hook has to report what it did. It returns an iterable mixing `(signal, handler)` pairs it connected and zero-argument callables that undo anything else; returning `None` means it left nothing behind.
 
-### Adding behavior
+##### Adding behavior
 `register_layer_hook` attaches an extra hook to a layer type. This can be useful if you want the main viewer to respond in a certain way to events of specific layer (sub)classes occuring on the ortho views. For example:
 
 ```python
@@ -126,7 +137,7 @@ m.register_layer_hook(Labels, report_clicks)
 ```
 allows the original layer in the main viewer to respond to click events in the ortho views. The property 'selected_label' will then automatically sync to the ortho views as well.
 
-### Overriding the built-in behavior
+##### Overriding the built-in behavior
 The built-in hooks are keyed by name (`layer_tool`, `labels_undo_redo`, `labels_paint`, `points_selection`) so a single one can be replaced without disturbing the others. Use this to keep the default behavior and add to it:
 
 ```python
@@ -146,11 +157,8 @@ m.set_layer_hook("labels_paint", paint_and_recount)
 
 Passing `None` disables a built-in entirely. `set_layer_hook` and `register_layer_hook` may be called after the orthogonal views are shown; the change then applies to layers added from that point on.
 
-## Changing the ortho view layer counterparts
+#### Changing the ortho view layer counterparts
 By default, the plugin will create shallow copies of each layer when activating the orthogonal views. These copies are of the same layer type but share the underlying data arrays with the original, to avoid duplication of the data. `OrthoViewManager.set_copy_layer` allows to change the copy layer function to a custom function: for example, instead of creating a copy of the same layer type, you can specify that the ortho views should make a copy of a specific layer subclass that has slightly different behavior, or that certain layer types should not be copied but produce an empty dummy layer in the ortho views instead.
-
-## Screen recording
-The 'Screen recording' tab offers a quick way to save a stitched image of the viewer with its orthogonal views. It is also possible to slide along a given axis and record a movie that is saved as a .avi file.
 
 ## Known issues and ongoing work
 - Deprecation warnings on `Window._qt_window`, `LayerList._get_step_size`, `LayerList._get_extent_world` (suppressed for now).
@@ -185,3 +193,4 @@ If you encounter any problems, please [file an issue](https://github.com/AnniekS
 [tox]: https://tox.readthedocs.io/en/latest/
 [pip]: https://pypi.org/project/pip/
 [PyPI]: https://pypi.org/
+<img width="1000" height="631" alt="orthoviews" src="https://github.com/user-attachments/assets/aa08ba3c-12a6-4cbe-be70-5243ae1d92e0" />
