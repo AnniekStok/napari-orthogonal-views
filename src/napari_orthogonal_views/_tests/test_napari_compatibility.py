@@ -68,21 +68,17 @@ def test_overlay_containers_hold_the_built_in_overlays(model):
 
 
 def test_a_custom_scene_overlay_round_trips(model):
-    """The crosshairs are registered this way, so it has to survive the 0.9 split of
-    _overlays into scene and canvas overlays."""
+    """The crosshairs/planes are registered this way, so it has to survive the 0.9
+    split of _overlays into scene and canvas overlays."""
 
-    from napari_orthogonal_views.overlays.cross_hair_overlay import (
-        CrosshairOverlay,
-    )
+    from napari_orthogonal_views.planes_overlay import PlanesOverlay
 
-    overlay = CrosshairOverlay(
-        blending="translucent_no_depth", axis_order=(-3, -2, -1)
-    )
-    set_scene_overlay(model, "crosshairs", overlay)
+    overlay = PlanesOverlay(blending="translucent_no_depth")
+    set_scene_overlay(model, "planes", overlay)
 
-    assert get_scene_overlay(model, "crosshairs") is overlay
-    assert get_scene_overlay(model, "crosshairs").visible is False
-    get_scene_overlay(model, "crosshairs").visible = True
+    assert get_scene_overlay(model, "planes") is overlay
+    assert get_scene_overlay(model, "planes").visible is False
+    get_scene_overlay(model, "planes").visible = True
     assert overlay.visible is True
 
 

@@ -17,8 +17,9 @@ from napari_orthogonal_views.ortho_view_widget import (
     ViewerModelContainer,
     get_property_names,
 )
-from napari_orthogonal_views.overlays.cross_hair_overlay import (
-    CrosshairOverlay,
+from napari_orthogonal_views.planes_overlay import (
+    CROSSHAIR_LENGTH,
+    PlanesOverlay,
 )
 
 
@@ -821,8 +822,8 @@ def test_layer_hook(make_napari_viewer, qtbot):
     m.cleanup()
 
 
-def crosshair_position(qt_viewer):
-    """Return the world position the crosshair visual is currently drawn at."""
+def planes_visual(qt_viewer):
+    """Return the vispy crosshairs/planes overlay of a canvas."""
 
     # napari 0.9 renamed the canvas' viewer-overlay map.
     canvas = qt_viewer.canvas
@@ -831,10 +832,18 @@ def crosshair_position(qt_viewer):
     ) or getattr(canvas, "_overlay_to_visual", {})
 
     for overlay, visual in overlay_to_visual.items():
-        if isinstance(overlay, CrosshairOverlay):
-            visual = visual[0] if isinstance(visual, list) else visual
-            return np.asarray(visual.node._pos)[0]
-    raise AssertionError("no crosshair overlay on this canvas")
+        if isinstance(overlay, PlanesOverlay):
+            return visual[0] if isinstance(visual, list) else visual
+    raise AssertionError("no planes overlay on this canvas")
+
+
+def crosshair_position(qt_viewer):
+    """Return the (x, y) canvas position where the two crosshair lines cross, with
+    both displayed axes switched on."""
+
+    pos = np.asarray(planes_visual(qt_viewer).crosshairs._pos)
+    # first line runs along x at the y position, the second along y at the x position
+    return np.array([pos[2, 0], pos[0, 1]])
 
 
 def test_a_listener_moving_the_dims_mid_sync_reaches_every_view(
@@ -943,7 +952,7 @@ def test_ortho_views_open_where_the_main_viewer_is_looking(
         m.right_widget.qt_viewer,
         m.bottom_widget.qt_viewer,
     ):
-        assert not np.allclose(crosshair_position(qt_viewer)[:2], 0)
+        assert not np.allclose(crosshair_position(qt_viewer), 0)
 
     m.cleanup()
 
@@ -1126,29 +1135,79 @@ def test_copy_layer_can_be_replaced(make_napari_viewer, qtbot):
     m.cleanup()
 
 
-def test_crosshair_overlay_visibility(make_napari_viewer, qtbot):
-    """Regression test: setting the crosshair overlay visible must not crash with
-    TypeError when napari passes font_manager to VispyCrosshairOverlay.__init__.
+def test_planes_overlay_visibility(make_napari_viewer, qtbot):
+    """Regression test: setting the crosshairs/planes overlay visible must not crash
+    with TypeError when napari passes font_manager to VispyPlanesOverlay.__init__.
 
     napari 0.7.0 changed _add_viewer_overlay to pass font_manager to all
-    overlays. VispyCrosshairOverlay did not accept **kwargs, causing a crash
-    whenever the CrosshairOverlay's .visible was set to True (which triggers
-    lazy initialization of the vispy overlay via create_vispy_overlay).
-
-    The CrosshairOverlay lives in the ortho viewer model's _overlays, so the
-    crash is triggered by setting visible on the ortho viewer's crosshair_overlay —
-    not on the main viewer, which has no CrosshairOverlay.
+    overlays, which crashed overlays whose __init__ did not accept **kwargs
+    whenever .visible was set to True (which triggers lazy initialization of the
+    vispy overlay via create_vispy_overlay).
     """
     viewer = make_napari_viewer()
     m = _get_manager(viewer)
     show_orthogonal_views(viewer)
     qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
 
-    # Triggering visible=True on the ortho viewer's CrosshairOverlay causes
-    # napari 0.7.0 to call create_vispy_overlay(font_manager=...) for it,
-    # which crashes because VispyCrosshairOverlay.__init__ has no **kwargs.
-    m.right_widget.vm_container.crosshair_overlay.visible = True
-    m.right_widget.vm_container.crosshair_overlay.visible = False
+    overlay = m.right_widget.vm_container.planes_overlay
+    overlay.visible_planes = (-3, -2, -1)
+    overlay.visible = True
+    overlay.visible = False
+
+    m.cleanup()
+
+
+def test_planes_are_crosshairs_in_2d_and_planes_in_3d(
+    make_napari_viewer, qtbot
+):
+    """A switched on plane shows as a crosshair line (displayed axis) or canvas
+    border (sliced axis) in 2D, and as a plane without crosshairs in 3D."""
+
+    viewer = make_napari_viewer()
+    m = _get_manager(viewer)
+    viewer.add_layer(Labels(np.zeros((30, 40, 50), dtype=np.uint8)))
+    show_orthogonal_views(viewer)
+    qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
+    planes_widget = m.main_controls_widget.controls_widget.planes_widget
+
+    # only the x plane: a single vertical line in 2D, no border (z is sliced)
+    m.set_plane(-1, True)
+    visual = planes_visual(viewer.window._qt_viewer)  # created once visible
+    assert planes_widget.main_checkbox.isChecked()
+    assert visual.node.visible
+    assert visual.crosshairs.visible
+    assert not visual.outline.visible
+    assert not visual.border.visible
+    pos = np.asarray(visual.crosshairs._pos)
+    assert pos.shape == (2, 2)
+    assert np.allclose(pos[:, 0], viewer.dims.point[-1])  # at the x position
+    assert np.allclose(np.abs(pos[:, 1]), CROSSHAIR_LENGTH)  # running along y
+
+    # the z plane is the plane of the 2D view, shown as the border
+    m.set_plane(-3, True)
+    assert visual.border.visible
+
+    # 3D: planes, no crosshairs or border
+    viewer.dims.ndisplay = 3
+    assert visual.node.visible
+    assert visual.outline.visible
+    assert not visual.crosshairs.visible
+    assert not visual.border.visible
+
+    # back to 2D, all planes switched off
+    viewer.dims.ndisplay = 2
+    m.set_plane(-1, False)
+    m.set_plane(-3, False)
+    assert not planes_widget.main_checkbox.isChecked()
+    assert not visual.node.visible
+    assert not visual.border.visible
+
+    # the main checkbox switches all planes on at once
+    m.set_cross_hairs(True)
+    assert all(cb.isChecked() for cb in planes_widget.checkboxes.values())
+    assert np.asarray(visual.crosshairs._pos).shape == (4, 2)
+
+    m.cleanup()
 
     m.cleanup()
 

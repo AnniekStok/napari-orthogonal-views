@@ -109,7 +109,8 @@ def test_sync_display(make_napari_viewer, qtbot):
 
 
 def test_update_dims_order_with_4d_data(make_napari_viewer, qtbot):
-    """Test that update_dims_order correctly updates dimension order and crosshair order."""
+    """Test that update_dims_order correctly updates the dimension order of the
+    orthogonal views."""
 
     # Create viewer with 4D data (T, Z, Y, X)
     viewer = make_napari_viewer()
@@ -126,28 +127,10 @@ def test_update_dims_order_with_4d_data(make_napari_viewer, qtbot):
     # Initially, dims.order should be (0, 1, 2, 3) for T, Z, Y, X
     assert viewer.dims.order == (0, 1, 2, 3)
 
-    # Check initial axis orders (last 3 dims in inverse notation)
-    # For main viewer: (0, 1, 2, 3) -> (-4, -3, -2, -1) -> last 3: (-3, -2, -1)
-    assert m.crosshair_overlay.axis_order == (-3, -2, -1)
-
     # Test changing dimension order in the main viewer
     # Reorder to (1, 0, 2, 3) - swap T and Z
     viewer.dims.order = (1, 0, 2, 3)
     qtbot.wait(100)  # Allow time for event to propagate
-
-    # After reordering, update_dims_order should have been called
-    # view_order = [1, 0, 2, 3] -> in relative notation: [-3, -4, -2, -1]
-    # last 3 are [-4, -2, -1]
-    expected_axis_order = (-4, -2, -1)
-    assert m.crosshair_overlay.axis_order == expected_axis_order
-
-    # Verify the right and bottom widget's crosshair axis order was updated
-    right_axis_order = m.right_widget.vm_container.crosshair_overlay.axis_order
-    assert right_axis_order == (-1, -2, -4)
-    bottom_axis_order = (
-        m.bottom_widget.vm_container.crosshair_overlay.axis_order
-    )
-    assert bottom_axis_order == (-2, -4, -1)
 
     # Verify that dimension orders in orthogonal views are updated
     # Right widget uses order (-1, -2, -3), bottom uses (-2, -3, -1)
