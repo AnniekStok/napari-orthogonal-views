@@ -18,7 +18,6 @@ from napari_orthogonal_views.ortho_view_widget import (
     get_property_names,
 )
 from napari_orthogonal_views.planes_overlay import (
-    CROSSHAIR_LENGTH,
     PlanesOverlay,
 )
 
@@ -1181,7 +1180,7 @@ def test_planes_are_crosshairs_in_2d_and_planes_in_3d(
     pos = np.asarray(visual.crosshairs._pos)
     assert pos.shape == (2, 2)
     assert np.allclose(pos[:, 0], viewer.dims.point[-1])  # at the x position
-    assert np.allclose(np.abs(pos[:, 1]), CROSSHAIR_LENGTH)  # running along y
+    assert np.allclose(np.abs(pos[:, 1]), 1e6)  # running along y
 
     # the z plane is the plane of the 2D view, shown as the border
     m.set_plane(-3, True)
