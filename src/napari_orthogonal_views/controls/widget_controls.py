@@ -17,7 +17,7 @@ from napari_orthogonal_views.attribute_helpers import get_camera, get_grid
 from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
 )
-from napari_orthogonal_views.overlays.cross_hair_overlay import Crosshairs
+from napari_orthogonal_views.planes_overlay import axis_color
 
 warnings.filterwarnings(
     "ignore", message="Gimbal lock detected", module="napari._vispy.camera"
@@ -67,7 +67,6 @@ class MainControlsWidget(QWidget):
         """Remove ControlsWidget from the layout"""
 
         if isinstance(self.controls_widget, ControlsWidget):
-            self.controls_widget.cross_widget.setChecked(False)
             self.controls_widget.show_axes.setChecked(False)
             for (
                 checkbox
@@ -82,12 +81,11 @@ class MainControlsWidget(QWidget):
 
 
 class ControlsWidget(QWidget):
-    """QWidget holding QCheckboxes for crosshairs, and syncing of zoom and camera center."""
+    """QWidget holding QCheckboxes for the crosshairs/planes, and syncing of zoom and camera center."""
 
     def __init__(self, widgets: list[OrthoViewWidget]):
         super().__init__()
 
-        self.cross_widget = QCheckBox("Show cross hairs")
         self.planes_widget = PlanesWidget(widgets=widgets)
         self.show_axes = QCheckBox("Show axes")
         self.show_axes.setChecked(True)
@@ -95,7 +93,6 @@ class ControlsWidget(QWidget):
         self.display_mode_widget = DisplayModeWidget(widgets=widgets)
 
         layout = QVBoxLayout()
-        layout.addWidget(self.cross_widget)
         layout.addWidget(self.planes_widget)
         layout.addWidget(self.show_axes)
         layout.addWidget(self.camera_widget)
@@ -110,8 +107,9 @@ class ControlsWidget(QWidget):
 
 
 class PlanesWidget(QWidget):
-    """One checkbox per plane, for the last three axes of the dims order. A plane is
-    drawn in 3D views, and as a colored canvas border in the 2D view showing it.
+    """One checkbox per plane, for the last three axes of the dims order, and a main
+    checkbox to toggle them all. A plane is drawn as a plane in 3D views, and in 2D
+    views as a crosshair line (displayed axis) or a colored canvas border (sliced axis).
     """
 
     plane_toggled = Signal(
@@ -122,7 +120,7 @@ class PlanesWidget(QWidget):
         super().__init__()
         self.setToolTip(
             "Show the planes through the current point: as planes in 3D views, as "
-            "a colored border in 2D views"
+            "crosshairs and a colored border in 2D views"
         )
 
         # the main viewer dims decide which axes get a checkbox
@@ -136,9 +134,9 @@ class PlanesWidget(QWidget):
 
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        main_checkbox = QCheckBox("Show planes")
-        main_checkbox.stateChanged.connect(self._toggle_all)
-        layout.addWidget(main_checkbox)
+        self.main_checkbox = QCheckBox("Show crosshairs")
+        self.main_checkbox.stateChanged.connect(self._toggle_all)
+        layout.addWidget(self.main_checkbox)
         self._slots = []
         for i in range(3):
             checkbox = QCheckBox()
@@ -170,7 +168,7 @@ class PlanesWidget(QWidget):
             axis = self._axes[i]
             self.checkboxes[axis] = checkbox
             checkbox.setText(str(dims.axis_labels[axis]))
-            r, g, b, _ = (Crosshairs.axis_color(axis) * 255).astype(int)
+            r, g, b, _ = (axis_color(axis) * 255).astype(int)
             checkbox.setStyleSheet(f"color: rgb({r}, {g}, {b});")
             checkbox.setToolTip(
                 f"Plane marking the position along axis {axis}"
@@ -179,6 +177,7 @@ class PlanesWidget(QWidget):
             checkbox.blockSignals(True)
             checkbox.setChecked(axis in self._visible)
             checkbox.blockSignals(False)
+        self._update_main_checkbox()
 
     def _on_toggled(self, slot: int, state: int) -> None:
         """Remember the state of the plane and emit it for the axis in this slot."""
@@ -189,6 +188,17 @@ class PlanesWidget(QWidget):
         else:
             self._visible.discard(axis)
         self.plane_toggled.emit(axis, state)
+        self._update_main_checkbox()
+
+    def _update_main_checkbox(self) -> None:
+        """Check the main checkbox when any of the planes is shown, without toggling
+        the other planes."""
+
+        self.main_checkbox.blockSignals(True)
+        self.main_checkbox.setChecked(
+            any(checkbox.isChecked() for checkbox in self.checkboxes.values())
+        )
+        self.main_checkbox.blockSignals(False)
 
     def _toggle_all(self, state: int) -> None:
         """Check or uncheck all the plane checkboxes."""

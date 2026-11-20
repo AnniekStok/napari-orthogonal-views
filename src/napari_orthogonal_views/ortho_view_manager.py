@@ -39,11 +39,7 @@ from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
     hook_name,
 )
-from napari_orthogonal_views.overlays.cross_hair_overlay import (
-    CrosshairOverlay,
-    VispyCrosshairOverlay,
-)
-from napari_orthogonal_views.overlays.planes_overlay import (
+from napari_orthogonal_views.planes_overlay import (
     PlanesOverlay,
     VispyPlanesOverlay,
 )
@@ -53,7 +49,6 @@ from napari_orthogonal_views.viewer_utils import (
     register_canvas,
 )
 
-overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
 overlay_to_visual[PlanesOverlay] = VispyPlanesOverlay
 
 
@@ -113,13 +108,7 @@ class OrthoViewManager:
         self._close_event_filter = _ViewerCloseEventFilter(self)
         viewer.window._qt_window.installEventFilter(self._close_event_filter)
 
-        # Add crosshairs overlay to main viewer
-        self.crosshair_overlay = CrosshairOverlay(
-            blending="translucent_no_depth", axis_order=(-3, -2, -1)
-        )
-        set_scene_overlay(self.viewer, "crosshairs", self.crosshair_overlay)
-
-        # Add planes overlay (3D only) to main viewer
+        # Add crosshairs/planes overlay to main viewer
         self.planes_overlay = PlanesOverlay(blending="translucent_no_depth")
         set_scene_overlay(self.viewer, "planes", self.planes_overlay)
 
@@ -271,28 +260,17 @@ class OrthoViewManager:
         set_axes_visible(self.viewer, state)
 
     def set_cross_hairs(self, state: bool = True) -> None:
-        """Activate/deactivate the checkbox to set the crosshairs."""
+        """Activate/deactivate the main checkbox, showing/hiding the crosshairs/planes
+        of all axes."""
 
         if not self.is_shown():
             return
-        self.main_controls_widget.controls_widget.cross_widget.setChecked(
+        self.main_controls_widget.controls_widget.planes_widget.main_checkbox.setChecked(
             state
         )
 
-    def show_cross_hairs(self, state: int) -> None:
-        """Show or hide the crosshairs overlay on all viewers"""
-
-        state = state == 2
-
-        get_scene_overlay(self.viewer, "crosshairs").visible = state
-        for widget in (self.right_widget, self.bottom_widget):
-            if isinstance(widget, OrthoViewWidget):
-                get_scene_overlay(
-                    widget.vm_container.viewer_model, "crosshairs"
-                ).visible = state
-
     def set_plane(self, axis: int, state: bool = True) -> None:
-        """Activate/deactivate the checkbox to show the plane normal to axis."""
+        """Activate/deactivate the checkbox to show the crosshair/plane normal to axis."""
 
         if not self.is_shown():
             return
@@ -347,7 +325,8 @@ class OrthoViewManager:
         ]
 
     def show_plane(self, axis: int, state: int) -> None:
-        """Show or hide the plane normal to axis on all viewers (3D rendering only)."""
+        """Show or hide the plane normal to axis on all viewers: as a plane in 3D, as a
+        crosshair line or canvas border in 2D."""
 
         for viewer in self._viewer_models():
             overlay = get_scene_overlay(viewer, "planes")
@@ -528,9 +507,6 @@ class OrthoViewManager:
         self.main_controls_widget.add_controls(
             widgets=[self.right_widget, self.bottom_widget]
         )
-        self.main_controls_widget.controls_widget.cross_widget.stateChanged.connect(
-            self.show_cross_hairs
-        )
         self.main_controls_widget.controls_widget.show_axes.stateChanged.connect(
             self.show_axes
         )
@@ -666,24 +642,8 @@ class OrthoViewManager:
     def update_dims_order(self):
         """When the dimension order is updated in the main viewer, also update the dim
         order in the orthogonal views (see OrthoViewWidget._set_orth_views_dims_order).
-        Also trigger update of the crosshairs axis order, to keep the crosshair
-        colors in sync."""
+        """
 
-        # update the colors of cross hairs in the main viewer.
-        view_order = list(self.viewer.dims.order)
-        ndim = len(view_order)
-        view_order = [r - ndim for r in view_order]
-
-        # Ensure axis_order is always a 3-tuple
-        axis_order_tuple = tuple(view_order[-3:])
-        if len(axis_order_tuple) < 3:
-            axis_order_tuple = axis_order_tuple + (0,) * (
-                3 - len(axis_order_tuple)
-            )
-
-        self.crosshair_overlay.axis_order = axis_order_tuple
-
-        # update the dimension order (and crosshair colors) in the orthoviews
         for widget in (self.right_widget, self.bottom_widget):
             if isinstance(widget, OrthoViewWidget):
                 widget._set_orth_views_dims_order()

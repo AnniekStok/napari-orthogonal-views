@@ -1,5 +1,4 @@
 import contextlib
-import warnings
 from collections.abc import Callable, Iterable, Iterator
 from functools import partial
 from typing import Any
@@ -31,10 +30,7 @@ from napari_orthogonal_views.layer_sync_hooks import (
     DEFAULT_LAYER_HOOKS,
     TOOL_PROPERTIES,
 )
-from napari_orthogonal_views.overlays.cross_hair_overlay import (
-    CrosshairOverlay,
-)
-from napari_orthogonal_views.overlays.planes_overlay import PlanesOverlay
+from napari_orthogonal_views.planes_overlay import PlanesOverlay
 from napari_orthogonal_views.viewer_utils import (
     activate_on_hover,
     register_canvas,
@@ -229,7 +225,6 @@ class ViewerModelContainer:
     def __init__(
         self,
         title: str,
-        order: tuple[int],
         sync_filters=None,
         layer_hooks: dict[str, tuple[type, Callable | None]] | None = None,
         copy_layer: Callable[[Layer, str], Layer] | None = None,
@@ -257,15 +252,7 @@ class ViewerModelContainer:
         # were wrapped on the original layer), keyed by id(orig_layer) as well.
         self._layer_teardowns: dict[int, list[Callable]] = {}
 
-        # Add crosshair overlays (initially invisible)
-        self.crosshair_overlay = CrosshairOverlay(
-            blending="translucent_no_depth", axis_order=order
-        )
-        set_scene_overlay(
-            self.viewer_model, "crosshairs", self.crosshair_overlay
-        )
-
-        # Add planes overlay
+        # Add crosshairs/planes overlay (initially invisible)
         self.planes_overlay = PlanesOverlay(blending="translucent")
         set_scene_overlay(self.viewer_model, "planes", self.planes_overlay)
 
@@ -647,7 +634,6 @@ class OrthoViewWidget(QWidget):
         # create container to store viewer model in
         self.vm_container = ViewerModelContainer(
             title="orthogonal view",
-            order=order,
             sync_filters=sync_filters,
             layer_hooks=layer_hooks,
             copy_layer=copy_layer,
@@ -758,14 +744,6 @@ class OrthoViewWidget(QWidget):
                 )
 
             model.dims.order = m_order
-
-            # keep the crosshair colors matched to the axes, in inverse numbering
-            ndim = len(m_order)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                self.vm_container.crosshair_overlay.axis_order = tuple(
-                    d - ndim for d in m_order[-3:]
-                )
 
         self._sync_axis_labels()
 

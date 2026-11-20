@@ -43,7 +43,7 @@ from napari_orthogonal_views.controls.vispy_patches import (
     restore_napari_handler,
     set_slab_union,
 )
-from napari_orthogonal_views.overlays.cross_hair_overlay import Crosshairs
+from napari_orthogonal_views.planes_overlay import axis_color
 
 VOLUME, SLICE, RANGE = "Full volume", "Slice", "Range"
 MODE_TOOLTIPS = {
@@ -299,7 +299,7 @@ class OrthosliceWidget(QWidget):
             strict=False,
         ):
             checkbox.setText(str(dims.axis_labels[axis]))
-            r, g, b, _ = (Crosshairs.axis_color(axis) * 255).astype(int)
+            r, g, b, _ = (axis_color(axis) * 255).astype(int)
             checkbox.setStyleSheet(f"color: rgb({r}, {g}, {b});")
             for widget in (slider, range_slider):
                 widget.blockSignals(True)
