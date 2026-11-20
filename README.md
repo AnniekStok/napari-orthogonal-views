@@ -17,6 +17,7 @@ This [napari] plugin was generated with [copier] using the [napari-plugin-templa
 
 <img width="1000" height="631" alt="orthoviews" src="https://github.com/user-attachments/assets/682a7e24-c668-4cd3-8ad7-444e1e902ee3" />
 
+
 <!--
 Don't miss the full getting started guide to set up your new package:
 https://github.com/napari/napari-plugin-template#getting-started
@@ -29,11 +30,18 @@ This plugin is based on this [example](https://napari.org/dev/gallery/multiple_v
 
 ## Installation
 
-You can install the latest development version of `napari-orthogonal-views` via [pip]:
+You can install `napari-orthogonal-views` via [pip]:
+
+```
+pip install napari-orthogonal-views
+```
+
+To install the latest development version:
 
 ```
 pip install git+https://github.com/AnniekStok/napari-orthogonal-views.git
 ```
+
 ## Usage
 This plugin is not discoverable as a widget, but commands are available in Views>Commands Palette (CMD+SHIFT+P):
   - Show Orthogonal Views
@@ -193,4 +201,3 @@ If you encounter any problems, please [file an issue](https://github.com/AnniekS
 [tox]: https://tox.readthedocs.io/en/latest/
 [pip]: https://pypi.org/project/pip/
 [PyPI]: https://pypi.org/
-<img width="1000" height="631" alt="orthoviews" src="https://github.com/user-attachments/assets/aa08ba3c-12a6-4cbe-be70-5243ae1d92e0" />
