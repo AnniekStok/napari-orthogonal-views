@@ -3,7 +3,9 @@ from unittest.mock import MagicMock, Mock, patch
 import numpy as np
 from qtpy.QtWidgets import QApplication
 
-from napari_orthogonal_views.screen_recorder_widget import ScreenRecorderWidget
+from napari_orthogonal_views.controls.screen_recorder_widget import (
+    ScreenRecorderWidget,
+)
 
 
 def test_screen_recorder_widget_initialization(qtbot):
@@ -76,7 +78,7 @@ def test_save_screenshot_with_callback(qtbot):
     test_path = "/tmp/test_screenshot.png"
 
     with patch(
-        "napari_orthogonal_views.screen_recorder_widget.QFileDialog.getSaveFileName"
+        "napari_orthogonal_views.controls.screen_recorder_widget.QFileDialog.getSaveFileName"
     ) as mock_dialog:
         mock_dialog.return_value = (test_path, "PNG files (*.png)")
 
@@ -95,7 +97,7 @@ def test_save_screenshot_cancelled(qtbot):
     widget = ScreenRecorderWidget(screenshot_callback=screenshot_cb)
 
     with patch(
-        "napari_orthogonal_views.screen_recorder_widget.QFileDialog.getSaveFileName"
+        "napari_orthogonal_views.controls.screen_recorder_widget.QFileDialog.getSaveFileName"
     ) as mock_dialog:
         mock_dialog.return_value = ("", "")
 
@@ -128,7 +130,7 @@ def test_record_with_callback(qtbot):
     test_path = "/tmp/test_video.avi"
 
     with patch(
-        "napari_orthogonal_views.screen_recorder_widget.QFileDialog.getSaveFileName"
+        "napari_orthogonal_views.controls.screen_recorder_widget.QFileDialog.getSaveFileName"
     ) as mock_dialog:
         mock_dialog.return_value = (test_path, "AVI files (*.avi)")
 
@@ -177,7 +179,7 @@ def test_record_cancelled(qtbot):
     widget = ScreenRecorderWidget(screenrecord_callback=screenrecord_cb)
 
     with patch(
-        "napari_orthogonal_views.screen_recorder_widget.QFileDialog.getSaveFileName"
+        "napari_orthogonal_views.controls.screen_recorder_widget.QFileDialog.getSaveFileName"
     ) as mock_dialog:
         mock_dialog.return_value = ("", "")
 

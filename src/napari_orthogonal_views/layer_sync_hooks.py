@@ -47,6 +47,7 @@ from collections.abc import Callable
 from typing import Any
 
 from napari.layers import Labels, Layer, Points
+from napari.utils.events import Event
 
 _MISSING = object()
 
@@ -349,10 +350,47 @@ def sync_points_selection(
     return [(orig_signal, orig_selection), (copied_signal, copied_selection)]
 
 
+def sync_clipping_plane_hook(orig_layer: Layer, copied_layer: Labels) -> None:
+    """Sync the (clipping) plane modifications between original layer and copied layer.
+
+    Planes are only rendered in 3D, where the orthogonal views share the dims order of
+    the main viewer, so they are copied as they are.
+    """
+
+    def sync_clipping_planes(event: Event | None = None) -> None:
+        new_planes = [
+            plane.dict() for plane in orig_layer.experimental_clipping_planes
+        ]
+        copied_planes = copied_layer.experimental_clipping_planes
+        if len(copied_planes) == len(new_planes):
+            for plane, new_plane in zip(
+                copied_planes, new_planes, strict=True
+            ):
+                plane.update(new_plane)
+        else:
+            copied_layer.experimental_clipping_planes = new_planes
+
+    # Check if both layers in this pair have the clipping plane attribute
+    if hasattr(orig_layer, "experimental_clipping_planes") and hasattr(
+        copied_layer, "experimental_clipping_planes"
+    ):
+        orig_layer.experimental_clipping_planes.events.connect(
+            sync_clipping_planes
+        )
+        sync_clipping_planes()
+        return [
+            (
+                orig_layer.experimental_clipping_planes.events,
+                sync_clipping_planes,
+            )
+        ]
+
+
 # Define built-in hooks
 DEFAULT_LAYER_HOOKS: dict[str, tuple[type, Callable]] = {
     "layer_tool": (Layer, sync_layer_tool),
     "labels_undo_redo": (Labels, sync_labels_undo_redo),
     "labels_paint": (Labels, sync_labels_paint),
     "points_selection": (Points, sync_points_selection),
+    "clipping_plane_hook": (Layer, sync_clipping_plane_hook),
 }

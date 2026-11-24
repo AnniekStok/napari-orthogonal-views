@@ -51,30 +51,26 @@ def test_sync_camera(make_napari_viewer, qtbot):
     qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
     assert isinstance(m.right_widget, OrthoViewWidget)
 
-    # Test zoom sync
-    m.set_zoom_sync(True)
+    # Test camera syncing
+    m.set_camera_sync(True)
     w = m.right_widget
     zoom_emitter = get_camera(m.viewer).events.zoom
+    center_emitter = get_camera(m.viewer).events.center
 
     # Check if any (emitter, handler) in _connections has this emitter
     assert any(em == zoom_emitter for em, _ in w._connections)
-
-    # Check if the connection is removed
-    m.set_zoom_sync(False)
-    assert not any(em == zoom_emitter for em, _ in w._connections)
-
-    # Test center sync
-    m.set_center_sync(True)
-    center_emitter = get_camera(m.viewer).events.center
     assert any(em == center_emitter for em, _ in w._connections)
-    m.set_center_sync(False)
+
+    # Check if the connections are removed
+    m.set_camera_sync(False)
+    assert not any(em == zoom_emitter for em, _ in w._connections)
     assert not any(em == center_emitter for em, _ in w._connections)
 
     m.cleanup()
 
 
-def test_sync_grid(make_napari_viewer, qtbot):
-    """Test syncing of grid settings between viewer and orthoviews."""
+def test_sync_display(make_napari_viewer, qtbot):
+    """Test syncing of grid nd ndisplay settings between viewer and orthoviews."""
 
     viewer = make_napari_viewer()
     m = _get_manager(viewer)
@@ -82,14 +78,16 @@ def test_sync_grid(make_napari_viewer, qtbot):
     qtbot.waitUntil(lambda: m.is_shown(), timeout=1000)
     assert isinstance(m.right_widget, OrthoViewWidget)
 
-    m.set_grid_sync(True)
+    m.set_display_mode_sync(True)
     w = m.right_widget
 
     grid = get_grid(m.viewer)
     grid_emitter = grid.events
+    ndisplay_emitter = viewer.dims.events.ndisplay
 
     # Check if any (emitter, handler) in _connections has this emitter
     assert any(em == grid_emitter for em, _ in w._connections)
+    assert any(em == ndisplay_emitter for em, _ in w._connections)
 
     # Check that grid enabling is synced
     grid.enabled = True
@@ -98,15 +96,21 @@ def test_sync_grid(make_napari_viewer, qtbot):
         timeout=1000,
     )
 
+    # Test syncing of the display mode
+    viewer.dims.ndisplay = 3
+    assert w.vm_container.viewer_model.dims.ndisplay == 3
+
     # Check if the connection is removed
-    m.set_grid_sync(False)
+    m.set_display_mode_sync(False)
     assert not any(em == grid_emitter for em, _ in w._connections)
+    assert not any(em == ndisplay_emitter for em, _ in w._connections)
 
     m.cleanup()
 
 
 def test_update_dims_order_with_4d_data(make_napari_viewer, qtbot):
-    """Test that update_dims_order correctly updates dimension order and crosshair order."""
+    """Test that update_dims_order correctly updates the dimension order of the
+    orthogonal views."""
 
     # Create viewer with 4D data (T, Z, Y, X)
     viewer = make_napari_viewer()
@@ -123,28 +127,10 @@ def test_update_dims_order_with_4d_data(make_napari_viewer, qtbot):
     # Initially, dims.order should be (0, 1, 2, 3) for T, Z, Y, X
     assert viewer.dims.order == (0, 1, 2, 3)
 
-    # Check initial axis orders (last 3 dims in inverse notation)
-    # For main viewer: (0, 1, 2, 3) -> (-4, -3, -2, -1) -> last 3: (-3, -2, -1)
-    assert m.crosshair_overlay.axis_order == (-3, -2, -1)
-
     # Test changing dimension order in the main viewer
     # Reorder to (1, 0, 2, 3) - swap T and Z
     viewer.dims.order = (1, 0, 2, 3)
     qtbot.wait(100)  # Allow time for event to propagate
-
-    # After reordering, update_dims_order should have been called
-    # view_order = [1, 0, 2, 3] -> in relative notation: [-3, -4, -2, -1]
-    # last 3 are [-4, -2, -1]
-    expected_axis_order = (-4, -2, -1)
-    assert m.crosshair_overlay.axis_order == expected_axis_order
-
-    # Verify the right and bottom widget's crosshair axis order was updated
-    right_axis_order = m.right_widget.vm_container.crosshair_overlay.axis_order
-    assert right_axis_order == (-1, -2, -4)
-    bottom_axis_order = (
-        m.bottom_widget.vm_container.crosshair_overlay.axis_order
-    )
-    assert bottom_axis_order == (-2, -4, -1)
 
     # Verify that dimension orders in orthogonal views are updated
     # Right widget uses order (-1, -2, -3), bottom uses (-2, -3, -1)

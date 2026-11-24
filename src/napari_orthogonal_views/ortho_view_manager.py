@@ -28,25 +28,28 @@ from napari_orthogonal_views.attribute_helpers import (
     set_scene_overlay,
 )
 from napari_orthogonal_views.axes_utils import set_axes_visible
-from napari_orthogonal_views.cross_hair_overlay import (
-    CrosshairOverlay,
-    VispyCrosshairOverlay,
+from napari_orthogonal_views.controls.orthoslice_widget import OrthosliceWidget
+from napari_orthogonal_views.controls.screen_recorder_widget import (
+    ScreenRecorderWidget,
 )
+from napari_orthogonal_views.controls.widget_controls import MainControlsWidget
 from napari_orthogonal_views.layer_sync_hooks import DEFAULT_LAYER_HOOKS
 from napari_orthogonal_views.ortho_view_widget import (
     DEFAULT_COPY_LAYER,
     OrthoViewWidget,
     hook_name,
 )
-from napari_orthogonal_views.screen_recorder_widget import ScreenRecorderWidget
+from napari_orthogonal_views.planes_overlay import (
+    PlanesOverlay,
+    VispyPlanesOverlay,
+)
 from napari_orthogonal_views.viewer_utils import (
     activate_on_hover,
     center_cross_on_mouse,
     register_canvas,
 )
-from napari_orthogonal_views.widget_controls import MainControlsWidget
 
-overlay_to_visual[CrosshairOverlay] = VispyCrosshairOverlay
+overlay_to_visual[PlanesOverlay] = VispyPlanesOverlay
 
 
 def init_actions():
@@ -87,6 +90,10 @@ class OrthoViewManager:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.main_window = viewer.window._qt_window
+            # the vispy visuals of the main viewer layers, for the orthoslices tab
+            self._layer_to_visual = (
+                viewer.window._qt_viewer.canvas.layer_to_visual
+            )
         self._central = self.main_window.centralWidget()
         self._container: QWidget | None = None
         self._splitter_handlers: list[tuple[QSplitter, object]] = []
@@ -101,11 +108,9 @@ class OrthoViewManager:
         self._close_event_filter = _ViewerCloseEventFilter(self)
         viewer.window._qt_window.installEventFilter(self._close_event_filter)
 
-        # Add crosshairs overlay to main viewer
-        self.crosshair_overlay = CrosshairOverlay(
-            blending="translucent_no_depth", axis_order=(-3, -2, -1)
-        )
-        set_scene_overlay(self.viewer, "crosshairs", self.crosshair_overlay)
+        # Add crosshairs/planes overlay to main viewer
+        self.planes_overlay = PlanesOverlay(blending="translucent_no_depth")
+        set_scene_overlay(self.viewer, "planes", self.planes_overlay)
 
         # make sure the viewer activates on hover, and that its canvas is a candidate
         # for shortcuts acting on whichever canvas the mouse is over
@@ -242,15 +247,6 @@ class OrthoViewManager:
         _apply()
         QTimer.singleShot(0, _apply)
 
-    def set_cross_hairs(self, state: bool = True) -> None:
-        """Activate/deactivate the checkbox to set the crosshairs."""
-
-        if not self.is_shown():
-            return
-        self.main_controls_widget.controls_widget.cross_widget.setChecked(
-            state
-        )
-
     def set_axes(self, state: bool = True) -> None:
         """Activate/deactivate the checkbox to set the axes visibility."""
 
@@ -263,40 +259,100 @@ class OrthoViewManager:
         state = state == 2
         set_axes_visible(self.viewer, state)
 
-    def show_cross_hairs(self, state: int) -> None:
-        """Show or hide the crosshairs overlay on all viewers"""
+    def set_cross_hairs(self, state: bool = True) -> None:
+        """Activate/deactivate the main checkbox, showing/hiding the crosshairs/planes
+        of all axes."""
 
-        state = state == 2
-
-        get_scene_overlay(self.viewer, "crosshairs").visible = state
-        for widget in (self.right_widget, self.bottom_widget):
-            if isinstance(widget, OrthoViewWidget):
-                get_scene_overlay(
-                    widget.vm_container.viewer_model, "crosshairs"
-                ).visible = state
-
-    def set_zoom_sync(self, state: bool = True) -> None:
-        """Activate the zoom syncing in the controls widget"""
         if not self.is_shown():
             return
-
-        self.main_controls_widget.controls_widget.zoom_widget.setChecked(state)
-
-    def set_center_sync(self, state: bool = True) -> None:
-        """Activate the center syncing in the controls widget"""
-        if not self.is_shown():
-            return
-
-        self.main_controls_widget.controls_widget.center_widget.setChecked(
+        self.main_controls_widget.controls_widget.planes_widget.main_checkbox.setChecked(
             state
         )
 
-    def set_grid_sync(self, state: bool = True) -> None:
-        """Activate the grid syncing in the controls widget"""
+    def set_plane(self, axis: int, state: bool = True) -> None:
+        """Activate/deactivate the checkbox to show the crosshair/plane normal to axis."""
+
+        if not self.is_shown():
+            return
+        self.main_controls_widget.controls_widget.planes_widget.checkboxes[
+            axis
+        ].setChecked(state)
+
+    def _ortho_widgets(self) -> list[OrthoViewWidget]:
+        return [
+            widget
+            for widget in (self.right_widget, self.bottom_widget)
+            if isinstance(widget, OrthoViewWidget)
+        ]
+
+    def _viewer_models(self) -> list[ViewerModel]:
+        """The main viewer and the viewer models of the orthogonal views."""
+
+        return [self.viewer] + [
+            widget.vm_container.viewer_model
+            for widget in self._ortho_widgets()
+        ]
+
+    def _clip_nodes(self, layer: Layer) -> list[tuple[object, object]]:
+        """The vispy nodes that clip a main viewer layer and its copies in the
+        orthogonal views (copies have the same name), with their napari vispy layers:
+        the volume nodes of images and labels, or the nodes with a clipping filter
+        (e.g. points, surfaces)."""
+
+        visuals = [self._layer_to_visual.get(layer)]
+        for widget in self._ortho_widgets():
+            layers = widget.vm_container.viewer_model.layers
+            if layer.name in layers:
+                visuals.append(
+                    widget.qt_viewer.canvas.layer_to_visual.get(
+                        layers[layer.name]
+                    )
+                )
+        nodes = [
+            (
+                visual,
+                getattr(
+                    getattr(visual, "_layer_node", None), "_volume_node", None
+                )
+                or getattr(visual, "node", None),
+            )
+            for visual in visuals
+        ]
+        return [
+            (visual, node)
+            for visual, node in nodes
+            if hasattr(node, "clipping_planes")
+        ]
+
+    def show_plane(self, axis: int, state: int) -> None:
+        """Show or hide the plane normal to axis on all viewers: as a plane in 3D, as a
+        crosshair line or canvas border in 2D."""
+
+        for viewer in self._viewer_models():
+            overlay = get_scene_overlay(viewer, "planes")
+            visible_planes = set(overlay.visible_planes) - {axis}
+            if state == 2:
+                visible_planes.add(axis)
+            overlay.visible_planes = tuple(sorted(visible_planes))
+            overlay.visible = len(visible_planes) > 0
+
+    def set_camera_sync(self, state: bool = True) -> None:
+        """Activate the camera syncing in the controls widget"""
         if not self.is_shown():
             return
 
-        self.main_controls_widget.controls_widget.grid_widget.setChecked(state)
+        self.main_controls_widget.controls_widget.camera_widget.setChecked(
+            state
+        )
+
+    def set_display_mode_sync(self, state: bool = True) -> None:
+        """Activate the display syncing in the controls widget"""
+        if not self.is_shown():
+            return
+
+        self.main_controls_widget.controls_widget.display_mode_widget.setChecked(
+            state
+        )
 
     @property
     def layer_hooks(self) -> Mapping[str, tuple[type, Callable | None]]:
@@ -451,12 +507,18 @@ class OrthoViewManager:
         self.main_controls_widget.add_controls(
             widgets=[self.right_widget, self.bottom_widget]
         )
-        self.main_controls_widget.controls_widget.cross_widget.stateChanged.connect(
-            self.show_cross_hairs
-        )
         self.main_controls_widget.controls_widget.show_axes.stateChanged.connect(
             self.show_axes
         )
+        self.main_controls_widget.controls_widget.planes_widget.plane_toggled.connect(
+            self.show_plane
+        )
+
+        # Add the orthoslices tab
+        self.orthoslice_widget = OrthosliceWidget(
+            self._viewer_models(), self._clip_nodes
+        )
+        self.controls_tab.addTab(self.orthoslice_widget, "Orthoslices")
 
         # Add the screen recorder tab when showing orthoviews
         if self.controls_tab.indexOf(self.screen_recorder_widget) == -1:
@@ -476,8 +538,7 @@ class OrthoViewManager:
         # activate specific checkboxes by default (grid is excluded)
         if self.activate_checkboxes:
             self.set_cross_hairs(True)
-            self.set_zoom_sync(True)
-            self.set_center_sync(True)
+            self.set_camera_sync(True)
 
     def center_crosshairs(self) -> None:
         """Move the crosshairs to the middle of the data along the displayed axes."""
@@ -530,6 +591,13 @@ class OrthoViewManager:
         self.bottom_widget = new_bottom
         old_bottom.deleteLater()
 
+        # Remove the orthoslices tab, restoring the clipping of the layers
+        self.orthoslice_widget.cleanup()
+        self.controls_tab.removeTab(
+            self.controls_tab.indexOf(self.orthoslice_widget)
+        )
+        self.orthoslice_widget.deleteLater()
+
         # Remove the screen recorder tab when hiding orthoviews
         tab_index = self.controls_tab.indexOf(self.screen_recorder_widget)
         if tab_index != -1:
@@ -573,77 +641,12 @@ class OrthoViewManager:
 
     def update_dims_order(self):
         """When the dimension order is updated in the main viewer, also update the dim
-        order in the orthogonal views. If there are more than 3 dimensions, the extra
-        dimensions are kept in the same order, and the remaining dimensions are reordered
-        according to the orthoviews' order: (-1, -2, -3) for right, and (-2, -3, -1) for
-        bottom. Also trigger update of the crosshairs axis order, to keep the crosshair
-        colors in sync."""
+        order in the orthogonal views (see OrthoViewWidget._set_orth_views_dims_order).
+        """
 
-        # update the colors of cross hairs in the main viewer.
-        view_order = list(self.viewer.dims.order)
-        ndim = len(view_order)
-        view_order = [r - ndim for r in view_order]
-
-        # Ensure axis_order is always a 3-tuple
-        axis_order_tuple = tuple(view_order[-3:])
-        if len(axis_order_tuple) < 3:
-            axis_order_tuple = axis_order_tuple + (0,) * (
-                3 - len(axis_order_tuple)
-            )
-
-        self.crosshair_overlay.axis_order = axis_order_tuple
-
-        # update the dimension order in the orthoviews
-        if len(self.viewer.dims.order) > 3:
-            # fill up with extra dims
-            new_order = list(self.viewer.dims.order[:-3])
-        else:
-            new_order = []
-
-        remaining_dims = [
-            d for d in self.viewer.dims.order if d not in new_order
-        ]
-
-        # Only update orthoviews if there are at least 3 dimensions
-        if len(remaining_dims) >= 3 and self.right_widget is not None:
-            right_order = self.right_widget.order
-
-            new_right_order = new_order + [
-                remaining_dims[right_order[0]],
-                remaining_dims[right_order[1]],
-                remaining_dims[right_order[2]],
-            ]
-
-            self.right_widget.qt_viewer.dims.dims.order = new_right_order
-
-            # Update crosshairs for right widget by changing the model's axis_order
-            # The VispyCrosshairOverlay listens to these changes and will respond by
-            # updating the colors.
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                # use inverse numbering
-                ndim = len(new_right_order)
-                new_right_order = [r - ndim for r in new_right_order]
-                self.right_widget.vm_container.crosshair_overlay.axis_order = (
-                    tuple(new_right_order[-3:])
-                )
-
-            bottom_order = self.bottom_widget.order
-            new_bottom_order = new_order + [
-                remaining_dims[bottom_order[0]],
-                remaining_dims[bottom_order[1]],
-                remaining_dims[bottom_order[2]],
-            ]
-
-            self.bottom_widget.qt_viewer.dims.dims.order = new_bottom_order
-
-            # Update crosshairs for bottom widget by changing the model's axis_order
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                new_bottom_order = [r - ndim for r in new_bottom_order]
-                self.bottom_widget.vm_container.crosshair_overlay.axis_order = tuple(
-                    new_bottom_order[-3:]
-                )
+        for widget in (self.right_widget, self.bottom_widget):
+            if isinstance(widget, OrthoViewWidget):
+                widget._set_orth_views_dims_order()
 
     def set_splitter_sizes(
         self, side_fraction: float, bottom_fraction: float
