@@ -30,7 +30,7 @@ requires-python = ">=3.10"
 # See best practices: https://napari.org/stable/plugins/building_a_plugin/best_practices.html
 dependencies = [
     "napari>=0.6.6,<0.11",
-    "numpy<2.5.5",
+    "numpy",
     "qtpy",
     "superqt",
     "opencv-python-headless",
