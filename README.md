@@ -50,7 +50,7 @@ This plugin is not discoverable as a widget, but commands are available in Views
   - Remove Orthogonal Views
 
 Once shown, it can also be popped up or collapsed using the checkbox in the bottom right corner 'Show orthogonal views'.
-The size of the orthogonal view windows can be adjusted by clicking and dragging the small dot in between the views, optionally one or two views can be hidden entirely. 
+The size of the orthogonal view windows can be adjusted by clicking and dragging the small dot in between the views, optionally one or two views can be hidden entirely.
 Pressing `T` on the keyboard will center all views to the current mouse location.
 
 By default, all events (including label editing such as painting) are synced across all views. The different views share the same underlying data array and undo/redo history.
@@ -167,6 +167,14 @@ Passing `None` disables a built-in entirely. `set_layer_hook` and `register_laye
 
 #### Changing the ortho view layer counterparts
 By default, the plugin will create shallow copies of each layer when activating the orthogonal views. These copies are of the same layer type but share the underlying data arrays with the original, to avoid duplication of the data. `OrthoViewManager.set_copy_layer` allows to change the copy layer function to a custom function: for example, instead of creating a copy of the same layer type, you can specify that the ortho views should make a copy of a specific layer subclass that has slightly different behavior, or that certain layer types should not be copied but produce an empty dummy layer in the ortho views instead.
+
+#### Changing the keyboard shortcut for centering the view
+The default shortcut `T` to center the views on the mouse cursor might be inconvenient if the plugin is used in combination with other plugins. You can change it to a different key (e.g. `C`) with:
+
+```python
+from napari_orthogonal_views.ortho_view_manager import set_center_shortcut
+set_center_shortcut("C")
+```
 
 ## Known issues and ongoing work
 - Deprecation warnings on `Window._qt_window`, `LayerList._get_step_size`, `LayerList._get_extent_world` (suppressed for now).
