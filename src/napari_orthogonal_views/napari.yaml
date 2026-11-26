@@ -16,3 +16,14 @@ contributions:
     - id: napari-orthogonal-views.delete_cleanup
       python_name: napari_orthogonal_views.ortho_view_manager:delete_and_cleanup
       title: Remove Orthogonal Views
+    - id: napari-orthogonal-views.show_widget
+      python_name: napari_orthogonal_views.ortho_view_manager:ShowOrthoViewsWidget
+      title: Show Orthogonal Views (menu entry)
+    - id: napari-orthogonal-views.controls_widget
+      python_name: napari_orthogonal_views.ortho_view_manager:OrthoViewControlsWidget
+      title: Ortho View Controls (menu entry)
+  widgets:
+    - command: napari-orthogonal-views.show_widget
+      display_name: Show orthogonal views
+    - command: napari-orthogonal-views.controls_widget
+      display_name: Ortho view controls

@@ -19,6 +19,7 @@ from qtpy.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -154,6 +155,19 @@ class OrthoViewManager:
         )
         self.controls_tab.addTab(self.main_controls_widget, "Controls")
 
+        # By default, the controls sit in the lower right corner ('the slot'), but they
+        # can be popped out and be docked elsewhere.
+        self._controls_dock = None
+        self._controls_slot = QWidget()
+        slot_layout = QVBoxLayout(self._controls_slot)
+        slot_layout.setContentsMargins(0, 0, 0, 0)
+        slot_layout.addWidget(self.controls_tab)
+        self._dock_button = QToolButton()
+        self._dock_button.setAutoRaise(True)
+        self._dock_button.clicked.connect(self._toggle_controls_postion)
+        self.controls_tab.setCornerWidget(self._dock_button, Qt.TopRightCorner)
+        self._update_dock_button()
+
         # Screen Recorder tab will be added when orthoviews are shown
         self.screen_recorder_widget = ScreenRecorderWidget(
             ndim=self.viewer.dims.ndim,
@@ -169,7 +183,7 @@ class OrthoViewManager:
 
         self.h_splitter_bottom = QSplitter(Qt.Horizontal)
         self.h_splitter_bottom.addWidget(self.bottom_widget)
-        self.h_splitter_bottom.addWidget(self.controls_tab)
+        self.h_splitter_bottom.addWidget(self._controls_slot)
 
         self.v_splitter = QSplitter(Qt.Vertical)
         self.v_splitter.addWidget(self.h_splitter_top)
@@ -182,7 +196,7 @@ class OrthoViewManager:
         # Ensure widgets allow shrinking to 0
         self.right_widget.setMinimumWidth(0)
         self.bottom_widget.setMinimumHeight(0)
-        self.controls_tab.setMinimumHeight(0)
+        self._controls_slot.setMinimumHeight(0)
 
         # Sync the two horizontal splitters so user movement mirrors to the other
         def _connect_sync(source: QSplitter, target: QSplitter):
@@ -215,6 +229,79 @@ class OrthoViewManager:
         self._stabilize_canvas_gl(self._original_qt_viewer.canvas)
 
         self._container = container
+
+    def dock_controls(self) -> None:
+        """Move the controls into a napari dock widget."""
+
+        if self._controls_dock is not None:
+            return
+        self._controls_slot.layout().removeWidget(self.controls_tab)
+        dock = self.viewer.window.add_dock_widget(
+            self.controls_tab,
+            name="Ortho view controls",
+            area="right",
+            add_vertical_stretch=False,
+        )
+        dock.destroyed.connect(
+            self._on_controls_dock_destroyed
+        )  # puts them back in the corner instead
+        self._controls_dock = dock
+        self._update_dock_button()
+
+    def embed_controls(self) -> None:
+        """Put controls back in their default spot, below the right orthogonal view."""
+
+        dock = self._controls_dock
+        if dock is None:
+            return
+        self._controls_dock = None
+        with contextlib.suppress(RuntimeError, TypeError, LookupError):
+            dock.destroyed.disconnect(self._on_controls_dock_destroyed)
+            self.viewer.window.remove_dock_widget(dock)
+        self._insert_controls_in_corner()
+
+    def show_controls(self) -> None:
+        """Make the controls visible: raise their dock widget if they are hidden, otherwise make sure they are in their default spot."""
+
+        if self._controls_dock is not None:
+            self._controls_dock.show()
+            self._controls_dock.raise_()
+        else:
+            self._insert_controls_in_corner()
+
+    def _toggle_controls_postion(self) -> None:
+        if self._controls_dock is None:
+            self.dock_controls()
+        else:
+            self.embed_controls()
+
+    def _on_controls_dock_destroyed(self, *args) -> None:
+        """Instead of closing, put controls back in the corner."""
+
+        self._controls_dock = None
+        self._insert_controls_in_corner()
+
+    def _insert_controls_in_corner(self) -> None:
+        """(Re)insert the controls in their default slot."""
+
+        # widgets may already be deleted when the viewer is closing
+        with contextlib.suppress(RuntimeError):
+            self._controls_slot.layout().addWidget(self.controls_tab)
+            self.controls_tab.show()
+            self._update_dock_button()
+
+    def _update_dock_button(self) -> None:
+        """Update the button icon and tooltip depending on its position."""
+        if self._controls_dock is None:
+            self._dock_button.setText("↗")
+            self._dock_button.setToolTip(
+                "Move the controls to the napari dock area."
+            )
+        else:
+            self._dock_button.setText("↙")
+            self._dock_button.setToolTip(
+                "Move the controls back in the lower right corner between the ortho views."
+            )
 
     def _stabilize_canvas_gl(self, canvas) -> None:
         """Keep a vispy canvas' depth-test configuration correct across GL context
@@ -827,6 +914,10 @@ class OrthoViewManager:
         # first hide to cleanup all connections
         self.hide()
 
+        # take the controls back from the napari dock area, so that they are deleted
+        # along with the container below
+        self.embed_controls()
+
         # remove the widgets and restore original canvas
         if self._container is not None:
             layout = self._central.layout()
@@ -869,9 +960,44 @@ _VIEWER_MANAGERS = weakref.WeakKeyDictionary()
 def _get_manager(viewer: Viewer) -> OrthoViewManager:
     """Return reference to OrthoViewManager"""
 
+    viewer = getattr(viewer, "__wrapped__", viewer)
     if viewer not in _VIEWER_MANAGERS:
         _VIEWER_MANAGERS[viewer] = OrthoViewManager(viewer)
     return _VIEWER_MANAGERS[viewer]
+
+
+class _LauncherWidget(QWidget):
+    """Empty widget for the napari plugin menu: it runs `action` on the
+    OrthoViewManager of the viewer, then removes itself from the dock area.
+    """
+
+    def __init__(self, napari_viewer: Viewer):
+        super().__init__()
+        self.viewer = napari_viewer
+        # remove this widget first: napari tabs it on top of other widgets in its area
+        QTimer.singleShot(0, self._remove_self)
+        self.action(_get_manager(napari_viewer))
+
+    def action(self, manager: OrthoViewManager) -> None:
+        raise NotImplementedError
+
+    def _remove_self(self) -> None:
+        with contextlib.suppress(LookupError, RuntimeError):
+            self.viewer.window.remove_dock_widget(self)
+
+
+class ShowOrthoViewsWidget(_LauncherWidget):
+    """Plugin menu entry showing the orthogonal views."""
+
+    def action(self, manager: OrthoViewManager) -> None:
+        QTimer.singleShot(0, manager.show)
+
+
+class OrthoViewControlsWidget(_LauncherWidget):
+    """Plugin menu entry showing the orthogonal view controls."""
+
+    def action(self, manager: OrthoViewManager) -> None:
+        QTimer.singleShot(0, manager.show_controls)
 
 
 def show_orthogonal_views(viewer: Viewer) -> None:
