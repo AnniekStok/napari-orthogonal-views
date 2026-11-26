@@ -1,7 +1,9 @@
+import contextlib
 import warnings
 from collections.abc import Callable
 
 from napari.components.camera import Camera
+from napari.utils.action_manager import action_manager
 from psygnal import Signal
 from qtpy.QtWidgets import (
     QCheckBox,
@@ -18,6 +20,10 @@ from napari_orthogonal_views.ortho_view_widget import (
     OrthoViewWidget,
 )
 from napari_orthogonal_views.planes_overlay import axis_color
+from napari_orthogonal_views.shortcuts import (
+    CENTER_ACTION,
+    center_shortcut_label,
+)
 
 warnings.filterwarnings(
     "ignore", message="Gimbal lock detected", module="napari._vispy.camera"
@@ -97,13 +103,26 @@ class ControlsWidget(QWidget):
         layout.addWidget(self.show_axes)
         layout.addWidget(self.camera_widget)
         layout.addWidget(self.display_mode_widget)
-        label = QLabel("Press T to center view on mouse")
-        label.setWordWrap(True)
-        font = label.font()
+        self.center_shortcut_label = QLabel(center_shortcut_label())
+        self.center_shortcut_label.setWordWrap(True)
+        font = self.center_shortcut_label.font()
         font.setItalic(True)
-        label.setFont(font)
-        layout.addWidget(label)
+        self.center_shortcut_label.setFont(font)
+        layout.addWidget(self.center_shortcut_label)
         self.setLayout(layout)
+
+        # A bound method, so napari holds this widget only weakly.
+        action_manager.events.shortcut_changed.connect(
+            self._on_shortcut_changed
+        )
+
+    def _on_shortcut_changed(self, event) -> None:
+        """Follow a rebind of the center-on-mouse shortcut."""
+        if event.name != CENTER_ACTION:
+            return
+        # RuntimeError (Qt side of widget deleted)
+        with contextlib.suppress(RuntimeError):
+            self.center_shortcut_label.setText(center_shortcut_label())
 
 
 class PlanesWidget(QWidget):

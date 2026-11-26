@@ -10,7 +10,6 @@ import tqdm
 from napari._vispy.utils.visual import overlay_to_visual
 from napari.components.viewer_model import ViewerModel
 from napari.layers import Layer
-from napari.utils.action_manager import action_manager
 from napari.utils.io import imsave
 from napari.viewer import Viewer
 from qtpy.QtCore import QEvent, QObject, Qt, QTimer
@@ -44,23 +43,16 @@ from napari_orthogonal_views.planes_overlay import (
     PlanesOverlay,
     VispyPlanesOverlay,
 )
+from napari_orthogonal_views.shortcuts import (  # noqa: F401 - re-exported
+    init_actions,
+    set_center_shortcut,
+)
 from napari_orthogonal_views.viewer_utils import (
     activate_on_hover,
-    center_cross_on_mouse,
     register_canvas,
 )
 
 overlay_to_visual[PlanesOverlay] = VispyPlanesOverlay
-
-
-def init_actions():
-    action_manager.register_action(
-        name="napari:move_point",
-        command=center_cross_on_mouse,
-        description="Move dims point to mouse position",
-        keymapprovider=ViewerModel,
-    )
-    action_manager.bind_shortcut("napari:move_point", "T")
 
 
 class _ViewerCloseEventFilter(QObject):
